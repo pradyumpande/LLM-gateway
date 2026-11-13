@@ -45,7 +45,14 @@ def test_chat_translates_model_and_uses_injected_client():
 
 @pytest.mark.parametrize(
     ("status_code", "retryable"),
-    [(400, False), (401, False), (404, False), (429, True), (500, True)],
+    [
+        (400, False),
+        (401, False),
+        (404, False),
+        (429, True),
+        (500, True),
+        (503, True),
+    ],
 )
 def test_chat_maps_http_errors_to_provider_error(status_code, retryable):
     def handler(request: httpx.Request) -> httpx.Response:
@@ -90,6 +97,29 @@ def test_chat_maps_timeout_to_retryable_gateway_timeout():
                 await provider.chat({"model": "alias"})
 
             assert exc_info.value.status_code == 504
+            assert exc_info.value.retryable is True
+
+    asyncio.run(run())
+
+
+def test_chat_maps_connection_error_to_retryable_bad_gateway():
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection failed", request=request)
+
+    async def run() -> None:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            provider = OpenAICompatProvider(
+                base_url="https://provider.test/v1",
+                model_id="test-model",
+                api_key="test-key",
+                client=client,
+            )
+
+            with pytest.raises(ProviderError) as exc_info:
+                await provider.chat({"model": "alias"})
+
+            assert exc_info.value.status_code == 502
+            assert exc_info.value.message == "Could not connect to the provider."
             assert exc_info.value.retryable is True
 
     asyncio.run(run())

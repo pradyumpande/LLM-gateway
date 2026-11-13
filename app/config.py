@@ -44,6 +44,10 @@ class ModelsConfig(BaseModel):
     models: Dict[str, ModelConfig]
 
 
+class UnknownModelAliasError(ValueError):
+    pass
+
+
 def load_models_config(path: Optional[Path] = None) -> ModelsConfig:
     config_path = path or MODELS_CONFIG_FILE
     with config_path.open("r", encoding="utf-8") as config_file:
@@ -56,7 +60,7 @@ def resolve(alias: str) -> Tuple[ProviderConfig, str, str]:
     model = config.models.get(alias)
     if model is None:
         aliases = ", ".join(sorted(config.models)) or "(none)"
-        raise ValueError(
+        raise UnknownModelAliasError(
             f"Unknown model alias {alias!r}. Available aliases: {aliases}."
         )
 

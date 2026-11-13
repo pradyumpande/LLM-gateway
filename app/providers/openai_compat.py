@@ -23,6 +23,12 @@ class OpenAICompatProvider(BaseProvider):
                 "Provider request timed out.",
                 retryable=True,
             ) from exc
+        except httpx.RequestError as exc:
+            raise ProviderError(
+                502,
+                "Could not connect to the provider.",
+                retryable=True,
+            ) from exc
 
         if not response.is_success:
             status_code = response.status_code

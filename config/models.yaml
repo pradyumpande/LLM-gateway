@@ -23,7 +23,7 @@ models:                       # key = the alias clients send as "model"
     tier: strong
   gemini-flash:
     provider: gemini
-    model_id: PASTE_EXACT_ID_FROM_AI_STUDIO
+    model_id: gemini-2.5-flash
     tier: strong
   mock-fast:
     provider: mock
