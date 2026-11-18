@@ -6,3 +6,5 @@ pyyaml
 openai
 pytest
 pytest-asyncio
+asyncpg
+redis

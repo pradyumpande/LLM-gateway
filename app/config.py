@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     database_url: Optional[str] = None
     redis_url: Optional[str] = None
     qdrant_url: Optional[str] = None
+    admin_token: Optional[str] = Field(default=None, repr=False)
     groq_api_key: Optional[str] = Field(default=None, repr=False)
     gemini_api_key: Optional[str] = Field(default=None, repr=False)
     openrouter_api_key: Optional[str] = Field(default=None, repr=False)

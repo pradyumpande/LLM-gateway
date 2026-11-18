@@ -1,0 +1,13 @@
+# USD per 1,000,000 tokens.
+# Groq currently lists these models as Enterprise / Contact Sales, with no
+# published token rates. Add contracted rates here when available.
+groq-8b:      {input: null, output: null}
+groq-70b:     {input: null, output: null}
+
+# Gemini 2.5 Flash Standard paid-tier pricing through November 30, 2026.
+# From December 1, 2026 it routes to Gemini 3.5 Flash-Lite at the same rates.
+# https://ai.google.dev/gemini-api/docs/pricing#gemini-2.5-flash
+gemini-flash: {input: 0.30, output: 2.50}
+
+# Deliberately high, notional prices for local budget tests.
+mock-fast:    {input: 1000, output: 2000}
