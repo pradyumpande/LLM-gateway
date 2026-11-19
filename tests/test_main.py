@@ -24,7 +24,14 @@ def mock_external_services(monkeypatch):
         lambda: SimpleNamespace(
             database_url="postgresql://test",
             redis_url="redis://test",
+            pii_score_threshold=0.5,
+            max_input_chars=200_000,
         ),
+    )
+    monkeypatch.setattr(
+        main,
+        "build_analyzer",
+        Mock(return_value=SimpleNamespace(analyze=Mock(return_value=[]))),
     )
     monkeypatch.setattr(
         main.db,
@@ -107,15 +114,46 @@ def test_lifespan_creates_and_closes_shared_http_client():
     asyncio.run(run())
 
 
+def test_lifespan_builds_stores_and_warms_analyzer(monkeypatch):
+    settings = SimpleNamespace(
+        database_url="postgresql://test",
+        redis_url="redis://test",
+        pii_score_threshold=0.5,
+        max_input_chars=200_000,
+    )
+    analyzer = SimpleNamespace(analyze=Mock(return_value=[]))
+    build = Mock(return_value=analyzer)
+    monkeypatch.setattr(main, "Settings", lambda: settings)
+    monkeypatch.setattr(main, "build_analyzer", build)
+
+    with TestClient(main.app):
+        assert main.app.state.analyzer is analyzer
+        assert main.app.state.settings is settings
+
+    build.assert_called_once_with()
+    analyzer.analyze.assert_called_once_with(
+        text="warm up 98765 43210",
+        language="en",
+        entities=main.DEFAULT_ENTITIES,
+    )
+
+
 def test_lifespan_connects_and_closes_database_and_redis(monkeypatch):
     settings = SimpleNamespace(
         database_url="postgresql://test",
         redis_url="redis://test",
+        pii_score_threshold=0.5,
+        max_input_chars=200_000,
     )
     monkeypatch.setattr(main, "Settings", lambda: settings)
 
     db_pool = SimpleNamespace(close=AsyncMock())
     redis_client = SimpleNamespace(ping=AsyncMock(), aclose=AsyncMock())
+    monkeypatch.setattr(
+        main,
+        "build_analyzer",
+        Mock(return_value=SimpleNamespace(analyze=Mock(return_value=[]))),
+    )
     create_pool = AsyncMock(return_value=db_pool)
     create_client = Mock(return_value=redis_client)
     monkeypatch.setattr(main.db, "create_pool", create_pool)
@@ -240,6 +278,127 @@ def test_chat_passes_through_extra_fields_and_translates_model(monkeypatch, caps
         "2026-11",
         Decimal("0.006"),
     )
+
+
+def test_chat_masks_pii_before_calling_provider(monkeypatch):
+    from types import SimpleNamespace
+
+    from app.auth import AuthContext
+
+    phone = "98765 43210"
+
+    class FakeAnalyzer:
+        def analyze(self, *, text, **kwargs):
+            start = text.find(phone)
+            if start < 0:
+                return []
+            return [
+                SimpleNamespace(
+                    entity_type="IN_PHONE",
+                    start=start,
+                    end=start + len(phone),
+                    score=0.6,
+                )
+            ]
+
+    monkeypatch.setattr(
+        main,
+        "build_analyzer",
+        Mock(return_value=FakeAnalyzer()),
+    )
+    monkeypatch.setattr(
+        main,
+        "resolve",
+        lambda alias: (
+            ProviderConfig(
+                base_url="https://provider.test/v1",
+                api_key_env="TEST_API_KEY",
+            ),
+            "real-model-id",
+            "test-key",
+        ),
+    )
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["payload"] = json.loads(request.read())
+        return httpx.Response(
+            200,
+            json={
+                "choices": [],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+            },
+        )
+
+    def configure_app(app):
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        app.state.http_client = client
+        return client
+
+    original_messages = [{"role": "user", "content": f"Call {phone}"}]
+    response = run_request(
+        "POST",
+        "/v1/chat/completions",
+        json={"model": "alias", "messages": original_messages},
+        configure_app=configure_app,
+    )
+
+    assert response.status_code == 200
+    assert captured["payload"]["messages"] == [
+        {"role": "user", "content": "Call <PHONE>"}
+    ]
+    assert original_messages == [{"role": "user", "content": f"Call {phone}"}]
+
+
+def test_block_pii_action_rejects_before_model_resolution(monkeypatch):
+    match_text = "98765 43210"
+
+    class FakeAnalyzer:
+        def analyze(self, *, text, **kwargs):
+            start = text.find(match_text)
+            if start < 0:
+                return []
+            return [
+                SimpleNamespace(
+                    entity_type="IN_PHONE",
+                    start=start,
+                    end=start + len(match_text),
+                    score=0.6,
+                )
+            ]
+
+    monkeypatch.setattr(
+        main,
+        "build_analyzer",
+        Mock(return_value=FakeAnalyzer()),
+    )
+    monkeypatch.setattr(
+        main,
+        "resolve",
+        Mock(side_effect=AssertionError("Blocked PII must not resolve a model")),
+    )
+    main.app.dependency_overrides[authenticate] = lambda: AuthContext(
+        team_id=1,
+        key_id=1,
+        team_name="test-team",
+        rpm=60,
+        burst=10,
+        budget_usd=10,
+        pii_action="block",
+    )
+
+    response = run_request(
+        "POST",
+        "/v1/chat/completions",
+        json={
+            "model": "mock-fast",
+            "messages": [{"role": "user", "content": f"Call {match_text}"}],
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "pii_detected"
+    main.resolve.assert_not_called()
 
 
 def test_budget_exceeded_returns_openai_429_before_provider_call(monkeypatch):

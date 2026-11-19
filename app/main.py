@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+import asyncio
 import json
 import logging
 import math
@@ -17,6 +18,12 @@ from app.auth import AuthContext, authenticate
 from app.budget import check_budget, current_month, record_spend
 from app.config import Settings, UnknownModelAliasError, resolve
 from app.errors import OpenAIAPIError, openai_error
+from app.guardrails.pii import (
+    DEFAULT_ENTITIES,
+    InputTooLongError,
+    build_analyzer,
+    mask_messages,
+)
 from app.providers.base import ProviderError
 from app.providers.openai_compat import OpenAICompatProvider
 from app.ratelimit import check_rate_limit
@@ -46,13 +53,23 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         app.state.http_client = client
         app.state.db = None
         app.state.redis = None
+        app.state.analyzer = None
+        app.state.settings = settings
         try:
             db_pool = await db.create_pool(settings.database_url)
             redis_connection = redis_client.create_client(settings.redis_url)
             await redis_connection.ping()
 
+            analyzer = await asyncio.to_thread(build_analyzer)
+            await asyncio.to_thread(
+                analyzer.analyze,
+                text="warm up 98765 43210",
+                language="en",
+                entities=DEFAULT_ENTITIES,
+            )
             app.state.db = db_pool
             app.state.redis = redis_connection
+            app.state.analyzer = analyzer
             yield
         finally:
             try:
@@ -168,6 +185,59 @@ async def chat_completions(
         )
 
     try:
+        masked_messages, pii_results = await asyncio.to_thread(
+            mask_messages,
+            req.messages,
+            request.app.state.analyzer,
+            request.app.state.settings.pii_score_threshold,
+            request.app.state.settings.max_input_chars,
+        )
+    except InputTooLongError as exc:
+        return _finish_chat_response(
+            openai_error(
+                413,
+                str(exc),
+                "invalid_request_error",
+                "input_too_large",
+            ),
+            response,
+            auth,
+            req.model,
+        )
+
+    if auth.pii_action not in {"mask", "block", "log_only"}:
+        return _finish_chat_response(
+            openai_error(
+                500,
+                f"Unsupported PII action {auth.pii_action!r}.",
+                "configuration_error",
+                "invalid_pii_action",
+            ),
+            response,
+            auth,
+            req.model,
+        )
+    if auth.pii_action == "block" and pii_results:
+        return _finish_chat_response(
+            openai_error(
+                400,
+                "Request blocked because it contains personal information.",
+                "guardrail_error",
+                "pii_detected",
+            ),
+            response,
+            auth,
+            req.model,
+        )
+    if auth.pii_action == "log_only" and pii_results:
+        logger.info(
+            "PII detected; passing original content per team policy. "
+            "request_id=%s entity_types=%s",
+            request.state.request_id,
+            sorted({result.entity_type for result in pii_results}),
+        )
+
+    try:
         provider_config, model_id, api_key = resolve(req.model)
     except UnknownModelAliasError as exc:
         return _finish_chat_response(
@@ -196,8 +266,12 @@ async def chat_completions(
         client=request.app.state.http_client,
     )
 
+    provider_payload = req.model_dump(exclude_none=True)
+    if auth.pii_action == "mask":
+        provider_payload["messages"] = masked_messages
+
     try:
-        result = await provider.chat(req.model_dump(exclude_none=True))
+        result = await provider.chat(provider_payload)
     except ProviderError as exc:
         return _finish_chat_response(
             _error_response(exc.status_code, exc.message),

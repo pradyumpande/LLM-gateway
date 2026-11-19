@@ -34,7 +34,14 @@ def admin_client(monkeypatch):
         lambda: SimpleNamespace(
             database_url="postgresql://test",
             redis_url="redis://test",
+            pii_score_threshold=0.5,
+            max_input_chars=200_000,
         ),
+    )
+    monkeypatch.setattr(
+        main,
+        "build_analyzer",
+        Mock(return_value=SimpleNamespace(analyze=Mock(return_value=[]))),
     )
     monkeypatch.setattr(main.db, "create_pool", AsyncMock(return_value=database))
     monkeypatch.setattr(

@@ -215,7 +215,13 @@ async def test_mock_fast_budget_rejects_after_first_success(
         lambda: SimpleNamespace(
             database_url="postgresql://test",
             redis_url=redis_url,
+            pii_score_threshold=0.5,
+            max_input_chars=200_000,
         ),
+    )
+    monkeypatch.setattr(
+        "app.main.build_analyzer",
+        lambda: SimpleNamespace(analyze=lambda **kwargs: []),
     )
     monkeypatch.setattr(
         "app.main.db.create_pool",
