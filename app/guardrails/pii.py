@@ -1,4 +1,6 @@
 from collections.abc import Sequence
+from copy import deepcopy
+from dataclasses import dataclass, field
 from typing import Any
 
 from presidio_analyzer import AnalyzerEngine, RecognizerResult
@@ -20,6 +22,7 @@ DEFAULT_ENTITIES = [
     "IN_PAN",
     "CREDIT_CARD",
 ]
+SUPPORTED_ENTITIES = [*DEFAULT_ENTITIES, "PERSON"]
 LABELS = {
     "EMAIL_ADDRESS": "EMAIL",
     "IN_PHONE": "PHONE",
@@ -28,6 +31,12 @@ LABELS = {
     "CREDIT_CARD": "CARD",
     "PERSON": "PERSON",
 }
+
+@dataclass
+class MaskState:
+    mapping: dict[tuple[str, str], str] = field(default_factory=dict)
+    counts: dict[str, int] = field(default_factory=dict)
+
 
 _MASKS = {
     "AADHAAR": "<AADHAAR>",
@@ -43,6 +52,25 @@ _MASKS = {
 
 class InputTooLongError(ValueError):
     pass
+
+
+def total_text_chars(messages: Sequence[dict[str, Any]]) -> int:
+    text_length = 0
+    for message in messages:
+        content = message.get("content")
+        if isinstance(content, str):
+            text_length += len(content)
+        elif isinstance(content, list):
+            text_length += sum(
+                len(part["text"])
+                for part in content
+                if (
+                    isinstance(part, dict)
+                    and part.get("type") == "text"
+                    and isinstance(part.get("text"), str)
+                )
+            )
+    return text_length
 
 
 def build_analyzer() -> AnalyzerEngine:
@@ -62,96 +90,109 @@ def build_analyzer() -> AnalyzerEngine:
     return analyzer
 
 
-def _mask_text(
-    text: str,
-    analyzer: AnalyzerEngine,
-    score_threshold: float,
-) -> tuple[str, list[RecognizerResult]]:
-    results = analyzer.analyze(
-        text=text,
-        language="en",
-        entities=DEFAULT_ENTITIES,
-        score_threshold=score_threshold,
-    )
-    selected: list[RecognizerResult] = []
-    for result in sorted(
+def resolve_overlaps(results: Sequence[RecognizerResult]) -> list[RecognizerResult]:
+    ordered = sorted(
         results,
         key=lambda item: (-item.score, -(item.end - item.start), item.start),
-    ):
-        if not any(
-            result.start < existing.end and existing.start < result.end
-            for existing in selected
+    )
+    kept: list[RecognizerResult] = []
+    for result in ordered:
+        if all(
+            result.end <= existing.start or result.start >= existing.end
+            for existing in kept
         ):
-            selected.append(result)
+            kept.append(result)
+    return sorted(kept, key=lambda item: item.start)
 
-    masked_text = text
-    for result in sorted(selected, key=lambda item: item.start, reverse=True):
+
+def mask_text(
+    text: str,
+    results: Sequence[RecognizerResult],
+    state: MaskState,
+) -> str:
+    output: list[str] = []
+    last = 0
+    for result in results:
         if not 0 <= result.start < result.end <= len(text):
             raise ValueError("Analyzer returned a span outside the input text.")
-        label = LABELS.get(result.entity_type, result.entity_type)
-        masked_text = (
-            masked_text[:result.start]
-            + f"<{label}>"
-            + masked_text[result.end:]
-        )
-    return masked_text, sorted(selected, key=lambda item: item.start)
+        value = text[result.start : result.end]
+        key = (result.entity_type, value)
+        if key not in state.mapping:
+            count = state.counts.get(result.entity_type, 0) + 1
+            state.counts[result.entity_type] = count
+            label = LABELS.get(result.entity_type, result.entity_type)
+            state.mapping[key] = f"<{label}_{count}>"
+        output.append(text[last : result.start])
+        output.append(state.mapping[key])
+        last = result.end
+    output.append(text[last:])
+    return "".join(output)
 
 
 def mask_messages(
-    messages: Sequence[dict[str, Any]],
     analyzer: AnalyzerEngine,
-    score_threshold: float = 0.5,
+    messages: Sequence[dict[str, Any]],
+    entities: Sequence[str] = DEFAULT_ENTITIES,
+    threshold: float = 0.5,
     max_input_chars: int = 200_000,
-) -> tuple[list[dict[str, Any]], list[RecognizerResult]]:
-    text_length = 0
-    for message in messages:
-        content = message.get("content")
-        if isinstance(content, str):
-            text_length += len(content)
-        elif isinstance(content, list):
-            text_length += sum(
-                len(part["text"])
-                for part in content
-                if isinstance(part, dict) and isinstance(part.get("text"), str)
-            )
-
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    masked_messages = deepcopy(messages)
+    text_length = total_text_chars(masked_messages)
     if text_length > max_input_chars:
         raise InputTooLongError(
             f"Input is {text_length} characters; maximum is {max_input_chars}."
         )
 
-    masked_messages: list[dict[str, Any]] = []
-    all_results: list[RecognizerResult] = []
-    for message in messages:
-        masked_message = dict(message)
-        content = message.get("content")
+    state = MaskState()
+    report: dict[str, Any] = {"counts": {}, "total": 0}
+    for masked_message in masked_messages:
+        content = masked_message.get("content")
         if isinstance(content, str):
-            masked_content, results = _mask_text(
-                content,
-                analyzer,
-                score_threshold,
+            results = resolve_overlaps(
+                analyzer.analyze(
+                    text=content,
+                    language="en",
+                    entities=list(entities),
+                    score_threshold=threshold,
+                )
             )
-            masked_message["content"] = masked_content
-            all_results.extend(results)
+            masked_message["content"] = mask_text(content, results, state)
+            _update_report(report, results)
         elif isinstance(content, list):
             masked_parts: list[Any] = []
             for part in content:
-                if isinstance(part, dict) and isinstance(part.get("text"), str):
-                    masked_text, results = _mask_text(
-                        part["text"],
-                        analyzer,
-                        score_threshold,
+                if (
+                    isinstance(part, dict)
+                    and part.get("type") == "text"
+                    and isinstance(part.get("text"), str)
+                ):
+                    results = resolve_overlaps(
+                        analyzer.analyze(
+                            text=part["text"],
+                            language="en",
+                            entities=list(entities),
+                            score_threshold=threshold,
+                        )
                     )
                     masked_part = dict(part)
-                    masked_part["text"] = masked_text
+                    masked_part["text"] = mask_text(part["text"], results, state)
                     masked_parts.append(masked_part)
-                    all_results.extend(results)
+                    _update_report(report, results)
                 else:
                     masked_parts.append(part)
             masked_message["content"] = masked_parts
-        masked_messages.append(masked_message)
 
-    return masked_messages, all_results
+    return masked_messages, report
+
+
+def _update_report(
+    report: dict[str, Any],
+    results: Sequence[RecognizerResult],
+) -> None:
+    counts = report["counts"]
+    for result in results:
+        counts[result.entity_type] = counts.get(result.entity_type, 0) + 1
+        report["total"] += 1
 
 
 def mask_pii(

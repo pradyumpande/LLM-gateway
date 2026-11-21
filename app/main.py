@@ -14,16 +14,13 @@ from pydantic import BaseModel, ConfigDict
 
 from app import db, redis_client
 from app.admin.routes import router as admin_router
+from app.audit import audit
 from app.auth import AuthContext, authenticate
 from app.budget import check_budget, current_month, record_spend
 from app.config import Settings, UnknownModelAliasError, resolve
 from app.errors import OpenAIAPIError, openai_error
-from app.guardrails.pii import (
-    DEFAULT_ENTITIES,
-    InputTooLongError,
-    build_analyzer,
-    mask_messages,
-)
+from app.guardrails.pii import build_analyzer
+from app.guardrails.pipeline import run_input_guardrails
 from app.providers.base import ProviderError
 from app.providers.openai_compat import OpenAICompatProvider
 from app.ratelimit import check_rate_limit
@@ -65,7 +62,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 analyzer.analyze,
                 text="warm up 98765 43210",
                 language="en",
-                entities=DEFAULT_ENTITIES,
+                entities=settings.pii_entities,
             )
             app.state.db = db_pool
             app.state.redis = redis_connection
@@ -89,8 +86,15 @@ logger = logging.getLogger(__name__)
 async def add_request_id(request: Request, call_next: Any):
     request_id = str(uuid4())
     request.state.request_id = request_id
+    request.state.pii_found = False
+    request.state.injection_flag = False
+    request.state.pii_masked_count = 0
     response = await call_next(request)
     response.headers["X-Request-Id"] = request_id
+    if request.state.pii_masked_count:
+        response.headers["X-PII-Masked"] = str(request.state.pii_masked_count)
+    if request.state.injection_flag:
+        response.headers["X-Injection-Flag"] = "true"
     return response
 
 
@@ -176,6 +180,56 @@ async def chat_completions(
             req.model,
         )
 
+    payload = req.model_dump(exclude_none=True)
+    guard = await run_input_guardrails(payload, auth, request.app.state)
+    request.state.pii_found = guard.pii_total > 0
+    request.state.injection_flag = guard.injection_flagged
+    if auth.pii_action == "mask" and guard.pii_total:
+        request.state.pii_masked_count = guard.pii_total
+    if auth.pii_action == "log_only" and guard.pii_total:
+        logger.info(
+            "PII detected; passing original content per team policy. "
+            "request_id=%s counts=%s",
+            request.state.request_id,
+            guard.pii_counts,
+        )
+
+    if guard.injection_flagged:
+        logger.warning(
+            "Prompt-injection signal request_id=%s score=%s rules=%s",
+            request.state.request_id,
+            guard.injection_score,
+            guard.injection_rules,
+        )
+    if guard.block:
+        if (
+            guard.block_status is None
+            or guard.block_message is None
+            or guard.block_code is None
+        ):
+            raise RuntimeError("Blocked guardrail result is missing response details.")
+        await audit(
+            request.app.state.db,
+            f"team:{auth.team_id}",
+            "guardrail_block",
+            {
+                "code": guard.block_code,
+                "pii": guard.pii_counts,
+                "injection_rules": guard.injection_rules,
+            },
+        )
+        return _finish_chat_response(
+            openai_error(
+                guard.block_status,
+                guard.block_message,
+                "invalid_request_error",
+                guard.block_code,
+            ),
+            response,
+            auth,
+            req.model,
+        )
+
     if req.stream:
         return _finish_chat_response(
             _error_response(400, "Streaming is not supported yet."),
@@ -184,58 +238,7 @@ async def chat_completions(
             req.model,
         )
 
-    try:
-        masked_messages, pii_results = await asyncio.to_thread(
-            mask_messages,
-            req.messages,
-            request.app.state.analyzer,
-            request.app.state.settings.pii_score_threshold,
-            request.app.state.settings.max_input_chars,
-        )
-    except InputTooLongError as exc:
-        return _finish_chat_response(
-            openai_error(
-                413,
-                str(exc),
-                "invalid_request_error",
-                "input_too_large",
-            ),
-            response,
-            auth,
-            req.model,
-        )
-
-    if auth.pii_action not in {"mask", "block", "log_only"}:
-        return _finish_chat_response(
-            openai_error(
-                500,
-                f"Unsupported PII action {auth.pii_action!r}.",
-                "configuration_error",
-                "invalid_pii_action",
-            ),
-            response,
-            auth,
-            req.model,
-        )
-    if auth.pii_action == "block" and pii_results:
-        return _finish_chat_response(
-            openai_error(
-                400,
-                "Request blocked because it contains personal information.",
-                "guardrail_error",
-                "pii_detected",
-            ),
-            response,
-            auth,
-            req.model,
-        )
-    if auth.pii_action == "log_only" and pii_results:
-        logger.info(
-            "PII detected; passing original content per team policy. "
-            "request_id=%s entity_types=%s",
-            request.state.request_id,
-            sorted({result.entity_type for result in pii_results}),
-        )
+    payload = guard.payload
 
     try:
         provider_config, model_id, api_key = resolve(req.model)
@@ -266,12 +269,8 @@ async def chat_completions(
         client=request.app.state.http_client,
     )
 
-    provider_payload = req.model_dump(exclude_none=True)
-    if auth.pii_action == "mask":
-        provider_payload["messages"] = masked_messages
-
     try:
-        result = await provider.chat(provider_payload)
+        result = await provider.chat(payload)
     except ProviderError as exc:
         return _finish_chat_response(
             _error_response(exc.status_code, exc.message),

@@ -31,6 +31,15 @@ class Settings(BaseSettings):
     injection_block_threshold: float = Field(default=0.8, ge=0, le=1)
     pii_score_threshold: float = Field(default=0.5, ge=0, le=1)
     max_input_chars: int = Field(default=200_000, gt=0, le=1_000_000)
+    pii_entities: list[str] = Field(
+        default_factory=lambda: [
+            "EMAIL_ADDRESS",
+            "IN_PHONE",
+            "AADHAAR",
+            "IN_PAN",
+            "CREDIT_CARD",
+        ]
+    )
 
 
 class ProviderConfig(BaseModel):

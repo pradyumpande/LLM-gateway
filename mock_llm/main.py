@@ -49,6 +49,7 @@ async def chat_completions(payload: dict[str, Any]) -> dict[str, Any]:
                 break
 
     reply = f"Mock reply to: {last_user_text}"
+    print(f"[mock] last user message: {last_user_text}")
     prompt_tokens = len(last_user_text) // 4
     completion_tokens = len(reply) // 4
 

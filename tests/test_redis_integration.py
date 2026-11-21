@@ -217,6 +217,15 @@ async def test_mock_fast_budget_rejects_after_first_success(
             redis_url=redis_url,
             pii_score_threshold=0.5,
             max_input_chars=200_000,
+            injection_flag_threshold=0.4,
+            injection_block_threshold=0.8,
+            pii_entities=[
+                "EMAIL_ADDRESS",
+                "IN_PHONE",
+                "AADHAAR",
+                "IN_PAN",
+                "CREDIT_CARD",
+            ],
         ),
     )
     monkeypatch.setattr(

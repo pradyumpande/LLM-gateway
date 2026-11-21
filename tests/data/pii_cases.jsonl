@@ -1,0 +1,80 @@
+{"text": "Call me at 98765 43210", "entities": [["IN_PHONE", "98765 43210"]]}
+{"text": "Reach me at +91 98765 43210", "entities": [["IN_PHONE", "+91 98765 43210"]]}
+{"text": "My mobile is +919876543210", "entities": [["IN_PHONE", "+919876543210"]]}
+{"text": "Contact 0091-98765-43210", "entities": [["IN_PHONE", "0091-98765-43210"]]}
+{"text": "Call 91 98765 43210", "entities": [["IN_PHONE", "91 98765 43210"]]}
+{"text": "Mobile: 09876543210", "entities": [["IN_PHONE", "09876543210"]]}
+{"text": "Number 98765-43210 is current", "entities": [["IN_PHONE", "98765-43210"]]}
+{"text": "Mobile 91234 56789", "entities": [["IN_PHONE", "91234 56789"]]}
+{"text": "WhatsApp +91-91234-56789", "entities": [["IN_PHONE", "+91-91234-56789"]]}
+{"text": "Call 67890 12345", "entities": [["IN_PHONE", "67890 12345"]]}
+{"text": "Cell: 76543 21098", "entities": [["IN_PHONE", "76543 21098"]]}
+{"text": "Phone 8765432109", "entities": [["IN_PHONE", "8765432109"]]}
+{"text": "Mob 09876543210", "entities": [["IN_PHONE", "09876543210"]]}
+{"text": "Call +919123456789", "entities": [["IN_PHONE", "+919123456789"]]}
+{"text": "My Aadhaar is 2345 6789 0124", "entities": [["AADHAAR", "2345 6789 0124"]]}
+{"text": "UID 234567890124", "entities": [["AADHAAR", "234567890124"]]}
+{"text": "Aadhar 3456 7890 1238", "entities": [["AADHAAR", "3456 7890 1238"]]}
+{"text": "Verified number 567890123458", "entities": [["AADHAAR", "567890123458"]]}
+{"text": "UIDAI: 6789-0123-4560", "entities": [["AADHAAR", "6789-0123-4560"]]}
+{"text": "My Aadhaar number is 7890 1234 5674", "entities": [["AADHAAR", "7890 1234 5674"]]}
+{"text": "345670123453", "entities": [["AADHAAR", "345670123453"]]}
+{"text": "UID 456701234564", "entities": [["AADHAAR", "456701234564"]]}
+{"text": "Aadhaar: 5670 1234 5673", "entities": [["AADHAAR", "5670 1234 5673"]]}
+{"text": "678123456786", "entities": [["AADHAAR", "678123456786"]]}
+{"text": "789234567893", "entities": [["AADHAAR", "789234567893"]]}
+{"text": "Call +91 98765 43210; UID 2345 6789 0124", "entities": [["IN_PHONE", "+91 98765 43210"], ["AADHAAR", "2345 6789 0124"]]}
+{"text": "Email ada@example.com", "entities": [["EMAIL_ADDRESS", "ada@example.com"]]}
+{"text": "Reach jane.doe+alerts@example.org", "entities": [["EMAIL_ADDRESS", "jane.doe+alerts@example.org"]]}
+{"text": "Send a copy to support@sub.example.net", "entities": [["EMAIL_ADDRESS", "support@sub.example.net"]]}
+{"text": "Call 98765 43210 or email ana@example.com", "entities": [["IN_PHONE", "98765 43210"], ["EMAIL_ADDRESS", "ana@example.com"]]}
+{"text": "Mail alice@example.com; phone +91 98765 43210; UID 234567890124", "entities": [["EMAIL_ADDRESS", "alice@example.com"], ["IN_PHONE", "+91 98765 43210"], ["AADHAAR", "234567890124"]]}
+{"text": "PAN abcpe1234f", "entities": [["IN_PAN", "abcpe1234f"]]}
+{"text": "Permanent account number: ALMPK1234A", "entities": [["IN_PAN", "ALMPK1234A"]]}
+{"text": "Tax IDs: ABCPE1234F and 91234 56789", "entities": [["IN_PAN", "ABCPE1234F"], ["IN_PHONE", "91234 56789"]]}
+{"text": "Card number 4111 1111 1111 1111", "entities": [["CREDIT_CARD", "4111 1111 1111 1111"]]}
+{"text": "4111111111111111", "entities": [["CREDIT_CARD", "4111111111111111"]]}
+{"text": "Visa 4111-1111-1111-1111", "entities": [["CREDIT_CARD", "4111-1111-1111-1111"]]}
+{"text": "Card 5555 5555 5555 4444", "entities": [["CREDIT_CARD", "5555 5555 5555 4444"]]}
+{"text": "Card 4111 1111 1111 1111; email pay@example.com", "entities": [["CREDIT_CARD", "4111 1111 1111 1111"], ["EMAIL_ADDRESS", "pay@example.com"]]}
+{"text": "Customer: 98765 43210; PAN ABCPE1234F; card 4111 1111 1111 1111", "entities": [["IN_PHONE", "98765 43210"], ["IN_PAN", "ABCPE1234F"], ["CREDIT_CARD", "4111 1111 1111 1111"]]}
+{"text": "What is the capital of France?", "entities": []}
+{"text": "Phone-like sequence: 12345 67890", "entities": []}
+{"text": "Tracking number 123456789012", "entities": []}
+{"text": "Tracking number 234567890123", "entities": []}
+{"text": "Tracking number 234567890125", "entities": []}
+{"text": "Shipment code 876543210987", "entities": []}
+{"text": "Timestamp 1700000000", "entities": []}
+{"text": "The release year is 2026", "entities": []}
+{"text": "Version 1.2.3 is installed", "entities": []}
+{"text": "Order ORD-112345678901", "entities": []}
+{"text": "Invoice number 100000000000", "entities": []}
+{"text": "Repeated digits 111111111111", "entities": []}
+{"text": "Invalid card 4111 1111 1111 1112", "entities": []}
+{"text": "A spaced sequence: 1234 5678 9012", "entities": []}
+{"text": "Office landline 011 2345 6789", "entities": []}
+{"text": "Write to ada at example dot com", "entities": []}
+{"text": "Malformed PAN-like value ABCPE12A4F", "entities": []}
+{"text": "Invalid PAN holder code ABCXE1234F", "entities": []}
+{"text": "Date 2026-11-21", "entities": []}
+{"text": "The meeting starts at 17:00:00", "entities": []}
+{"text": "Native-script digits: १२३४५६७८९०१२", "entities": []}
+{"text": "A mobile number starting with one: 1234567890", "entities": []}
+{"text": "Landline 022 2345 6789", "entities": []}
+{"text": "Build v2026.11.21", "entities": []}
+{"text": "Parcel UID 482917305614", "entities": []}
+{"text": "Order UID 725304981262", "entities": []}
+{"text": "Batch UID 398715204637", "entities": []}
+{"text": "Tracking UID 816293740524", "entities": []}
+{"text": "Reference UID 572804193659", "entities": []}
+{"text": "Dispatch UID 934618207515", "entities": []}
+{"text": "Tracking ref 876543210980", "entities": []}
+{"text": "Reference 4-4-4 code 1234-5678-9012", "entities": []}
+{"text": "Order 19876543210", "entities": []}
+{"text": "Release 2.4.0", "entities": []}
+{"text": "Build date 2026-11-21", "entities": []}
+{"text": "Aadhaar-like typo 2345 6789 0123", "entities": []}
+{"text": "PAN typo ABCPE123AF", "entities": []}
+{"text": "Card typo 4111-1111-1111-1112", "entities": []}
+{"text": "The project code is ALPHA-42", "entities": []}
+{"text": "A plain status update with no identifying values.", "entities": []}

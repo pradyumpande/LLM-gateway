@@ -1,6 +1,6 @@
 import secrets
 from decimal import Decimal
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel
@@ -36,6 +36,7 @@ class TeamUpdate(BaseModel):
     monthly_budget_usd: Optional[Decimal] = None
     rate_limit_rpm: Optional[int] = None
     burst: Optional[int] = None
+    pii_action: Optional[Literal["mask", "block", "log_only"]] = None
 
 
 router = APIRouter(
@@ -73,6 +74,7 @@ async def update_team(
             team.monthly_budget_usd,
             team.rate_limit_rpm,
             team.burst,
+            team.pii_action,
         )
     ):
         raise HTTPException(status_code=422, detail="Provide at least one field to update.")
@@ -82,7 +84,8 @@ async def update_team(
         UPDATE teams
         SET monthly_budget_usd = COALESCE($2, monthly_budget_usd),
             rate_limit_rpm = COALESCE($3, rate_limit_rpm),
-            burst = COALESCE($4, burst)
+            burst = COALESCE($4, burst),
+            pii_action = COALESCE($5, pii_action)
         WHERE id = $1
         RETURNING id, name, monthly_budget_usd, rate_limit_rpm, burst,
                   pii_action, created_at
@@ -91,9 +94,18 @@ async def update_team(
         team.monthly_budget_usd,
         team.rate_limit_rpm,
         team.burst,
+        team.pii_action,
     )
     if row is None:
         raise HTTPException(status_code=404, detail="Team not found.")
+
+    key_rows = await request.app.state.db.fetch(
+        "SELECT key_hash FROM api_keys WHERE team_id = $1",
+        team_id,
+    )
+    cache_keys = [f"auth:{key_row['key_hash']}" for key_row in key_rows]
+    if cache_keys:
+        await request.app.state.redis.delete(*cache_keys)
     return dict(row)
 
 

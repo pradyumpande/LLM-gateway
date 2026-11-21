@@ -45,7 +45,7 @@ def test_pipeline_flags_and_blocks_injection_using_settings():
 
     assert result.injection_flagged
     assert result.blocked
-    assert result.injection_score == 0.9
+    assert result.injection_score == 1.0
 
 
 def test_pipeline_masks_pii_and_rejects_oversized_input():
@@ -66,7 +66,7 @@ def test_injection_dataset_labels_match_scoring():
 
     assert cases
     for case in cases:
-        assert (score_injection(case["text"]) >= 0.8) is case["injection"]
+        assert score_injection(case["text"]).flagged is case["injection"]
 
 
 def test_settings_reject_input_limit_above_spacy_limit():

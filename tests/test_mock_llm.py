@@ -3,9 +3,10 @@ import asyncio
 import httpx
 
 import mock_llm.main as mock_main
+from app.guardrails.pii import DEFAULT_ENTITIES, mask_messages
 
 
-def test_chat_echoes_last_user_message_and_computes_usage(monkeypatch):
+def test_chat_echoes_last_user_message_and_computes_usage(monkeypatch, capsys):
     observed_delays = []
 
     async def record_sleep(delay):
@@ -48,6 +49,9 @@ def test_chat_echoes_last_user_message_and_computes_usage(monkeypatch):
         "total_tokens": len("last user text") // 4 + len(reply) // 4,
     }
     assert observed_delays == [0.2]
+    assert capsys.readouterr().out.strip() == (
+        "[mock] last user message: last user text"
+    )
 
 
 def test_chat_returns_500_when_failure_is_selected(monkeypatch):
@@ -72,3 +76,49 @@ def test_chat_returns_500_when_failure_is_selected(monkeypatch):
     response = asyncio.run(run())
 
     assert response.status_code == 500
+
+
+def test_chat_prints_all_masked_pii(analyzer, monkeypatch, capsys):
+    async def no_wait(delay):
+        return None
+
+    monkeypatch.setattr(mock_main, "MOCK_DELAY_MS", 0)
+    monkeypatch.setattr(mock_main, "MOCK_FAIL_RATE", 0)
+    monkeypatch.setattr(mock_main.asyncio, "sleep", no_wait)
+    monkeypatch.setattr(mock_main.random, "random", lambda: 0.5)
+
+    messages = [
+        {
+            "role": "user",
+            "content": (
+                "Phone 98765 43210, Aadhaar 2345 6789 0124, "
+                "email asha@example.com, PAN ABCPE1234F, "
+                "card 4111 1111 1111 1111"
+            ),
+        }
+    ]
+    masked, report = mask_messages(
+        analyzer,
+        messages,
+        DEFAULT_ENTITIES,
+        0.5,
+    )
+
+    async def run():
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=mock_main.app),
+            base_url="http://mock",
+        ) as client:
+            return await client.post(
+                "/v1/chat/completions",
+                json={"model": "mock-1", "messages": masked},
+            )
+
+    response = asyncio.run(run())
+
+    assert response.status_code == 200
+    assert report["total"] == 5
+    assert capsys.readouterr().out.strip() == (
+        "[mock] last user message: Phone <PHONE_1>, Aadhaar <AADHAAR_1>, "
+        "email <EMAIL_1>, PAN <PAN_1>, card <CARD_1>"
+    )

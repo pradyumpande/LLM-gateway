@@ -36,6 +36,15 @@ def admin_client(monkeypatch):
             redis_url="redis://test",
             pii_score_threshold=0.5,
             max_input_chars=200_000,
+            injection_flag_threshold=0.4,
+            injection_block_threshold=0.8,
+            pii_entities=[
+                "EMAIL_ADDRESS",
+                "IN_PHONE",
+                "AADHAAR",
+                "IN_PAN",
+                "CREDIT_CARD",
+            ],
         ),
     )
     monkeypatch.setattr(
@@ -115,35 +124,62 @@ def test_create_team_uses_parameterized_insert(admin_client):
 
 
 def test_patch_team_and_list_teams(admin_client):
-    client, database, _ = admin_client
+    client, database, redis = admin_client
     team = {
         "id": 7,
         "name": "search-team",
         "monthly_budget_usd": Decimal("8"),
         "rate_limit_rpm": 90,
         "burst": 12,
-        "pii_action": "mask",
+        "pii_action": "log_only",
         "created_at": datetime(2026, 1, 1, tzinfo=timezone.utc),
     }
     database.fetchrow.return_value = team
+    database.fetch.side_effect = [
+        [{"key_hash": "cached-hash-one"}, {"key_hash": "cached-hash-two"}],
+        [team],
+    ]
     update = client.patch(
         "/admin/teams/7",
         headers=HEADERS,
-        json={"monthly_budget_usd": 8, "rate_limit_rpm": 90, "burst": 12},
+        json={
+            "monthly_budget_usd": 8,
+            "rate_limit_rpm": 90,
+            "burst": 12,
+            "pii_action": "log_only",
+        },
     )
 
     assert update.status_code == 200
+    assert update.json()["pii_action"] == "log_only"
     query, *values = database.fetchrow.await_args.args
     assert "WHERE id = $1" in query
     assert "search-team" not in query
-    assert values == [7, Decimal("8"), 90, 12]
+    assert "pii_action = COALESCE($5, pii_action)" in query
+    assert values == [7, Decimal("8"), 90, 12, "log_only"]
+    redis.delete.assert_awaited_once_with(
+        "auth:cached-hash-one",
+        "auth:cached-hash-two",
+    )
 
-    database.fetch.return_value = [team]
     listing = client.get("/admin/teams", headers=HEADERS)
 
     assert listing.status_code == 200
     assert listing.json()[0]["id"] == 7
-    database.fetch.assert_awaited_once()
+    assert database.fetch.await_count == 2
+
+
+def test_patch_team_rejects_unknown_pii_action(admin_client):
+    client, database, _ = admin_client
+
+    response = client.patch(
+        "/admin/teams/7",
+        headers=HEADERS,
+        json={"pii_action": "allow_all"},
+    )
+
+    assert response.status_code == 422
+    database.fetchrow.assert_not_awaited()
 
 
 def test_create_team_key_returns_secret_once_and_stores_only_hash(admin_client, monkeypatch):

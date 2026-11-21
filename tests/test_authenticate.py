@@ -30,6 +30,15 @@ def _configure_auth_dependencies(monkeypatch, *, auth_row):
             redis_url="redis://test",
             pii_score_threshold=0.5,
             max_input_chars=200_000,
+            injection_flag_threshold=0.4,
+            injection_block_threshold=0.8,
+            pii_entities=[
+                "EMAIL_ADDRESS",
+                "IN_PHONE",
+                "AADHAAR",
+                "IN_PAN",
+                "CREDIT_CARD",
+            ],
         ),
     )
     monkeypatch.setattr(
