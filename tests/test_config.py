@@ -17,6 +17,35 @@ def test_settings_reads_env_file(tmp_path):
     assert settings.groq_api_key == "test-key"
 
 
+def test_settings_reads_cache_options_and_resolves_project_cache_path(tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "CACHE_ENABLED=false\n"
+        "CACHE_TTL_SECONDS=90\n"
+        "SEMANTIC_THRESHOLD=0.94\n"
+        "FASTEMBED_CACHE_DIR=.cache/custom\n"
+        "QDRANT_API_KEY=\n",
+        encoding="utf-8",
+    )
+
+    settings = Settings(_env_file=env_file)
+
+    assert settings.cache_enabled is False
+    assert settings.cache_ttl_seconds == 90
+    assert settings.semantic_threshold == 0.94
+    assert settings.fastembed_cache_dir == app_config.PROJECT_ROOT / ".cache/custom"
+    assert settings.qdrant_api_key == ""
+
+
+def test_settings_rejects_inverted_semantic_character_range():
+    with pytest.raises(ValueError, match="SEMANTIC_MAX_CHARS"):
+        Settings(
+            _env_file=None,
+            semantic_min_chars=20,
+            semantic_max_chars=10,
+        )
+
+
 def test_load_models_config_parses_yaml_models():
     config = load_models_config()
 

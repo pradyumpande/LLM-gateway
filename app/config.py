@@ -3,13 +3,15 @@ from pathlib import Path
 from typing import Dict, Optional, Tuple
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 ENV_FILE = PROJECT_ROOT / ".env"
 MODELS_CONFIG_FILE = PROJECT_ROOT / "config" / "models.yaml"
+FASTEMBED_CACHE_DIR = PROJECT_ROOT / ".cache" / "fastembed"
+os.environ.setdefault("FASTEMBED_CACHE_PATH", str(FASTEMBED_CACHE_DIR))
 
 
 class Settings(BaseSettings):
@@ -22,6 +24,7 @@ class Settings(BaseSettings):
     database_url: Optional[str] = None
     redis_url: Optional[str] = None
     qdrant_url: Optional[str] = None
+    qdrant_api_key: Optional[str] = Field(default=None, repr=False)
     admin_token: Optional[str] = Field(default=None, repr=False)
     groq_api_key: Optional[str] = Field(default=None, repr=False)
     gemini_api_key: Optional[str] = Field(default=None, repr=False)
@@ -40,6 +43,34 @@ class Settings(BaseSettings):
             "CREDIT_CARD",
         ]
     )
+    cache_enabled: bool = True
+    cache_ttl_seconds: int = Field(default=3600, gt=0)
+    cache_max_temperature: float = Field(default=0.7, ge=0, le=2)
+    cache_max_bytes: int = Field(default=102_400, gt=0)
+    cache_lookup_timeout_s: float = Field(default=1.5, gt=0)
+    cache_cleanup_interval_s: int = Field(default=600, gt=0)
+    semantic_enabled: bool = True
+    semantic_threshold: float = Field(default=0.95, ge=0, le=1)
+    semantic_min_chars: int = Field(default=8, gt=0)
+    semantic_max_chars: int = Field(default=1000, gt=0)
+    embed_model: str = "BAAI/bge-small-en-v1.5"
+    fastembed_cache_dir: Path = FASTEMBED_CACHE_DIR
+
+    @field_validator("fastembed_cache_dir")
+    @classmethod
+    def resolve_fastembed_cache_dir(cls, value: Path) -> Path:
+        if value.is_absolute():
+            return value
+        return PROJECT_ROOT / value
+
+    @model_validator(mode="after")
+    def validate_semantic_character_range(self) -> "Settings":
+        if self.semantic_max_chars < self.semantic_min_chars:
+            raise ValueError(
+                "SEMANTIC_MAX_CHARS must be greater than or equal to "
+                "SEMANTIC_MIN_CHARS."
+            )
+        return self
 
 
 class ProviderConfig(BaseModel):

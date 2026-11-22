@@ -9,3 +9,5 @@ pytest-asyncio
 asyncpg
 redis
 presidio-analyzer
+fastembed
+qdrant-client

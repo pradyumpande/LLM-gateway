@@ -106,3 +106,191 @@ includes thread dispatch and PII analysis/masking, but excludes input-size and
 injection checks, database work, and provider/network latency. This is a local
 baseline, not an end-to-end request-latency guarantee; model, hardware, and
 workload affect it.
+
+### Embedding model cache
+
+FastEmbed's first model initialization downloads its model files (about 130 MB).
+`FASTEMBED_CACHE_PATH` defaults to `.cache/fastembed` under the project root so
+the model cache persists with the project instead of relying on a temporary OS
+cache. The `.cache/` directory is ignored by Git.
+FastEmbed depends on ONNX Runtime; use a stable Python release with an available
+ONNX Runtime wheel. The Python 3.15.0 release candidate in this development
+environment had no matching wheel, while installation succeeded under Python
+3.13.17.
+
+### Response cache policy
+
+Exact cache keys use SHA-256 over canonical JSON, the requested model alias,
+team ID, normalized messages, and generation parameters. Message normalization
+strips only leading and trailing whitespace from string content; inner
+whitespace is preserved because it can affect code and prompts. Parameter
+hashes omit model/messages and transport or client metadata fields. Python's
+process-randomized built-in `hash()` is not used.
+
+An omitted temperature remains cache-eligible. OpenAI-style providers commonly
+default it to 1.0, so treating the omitted value as an explicit temperature
+above the configured limit would disable caching for many clients. This means
+a cache hit can return one earlier sample for a request whose provider default
+is stochastic; this is intended for FAQ-style traffic.
+
+Requests marked with PII or an injection flag bypass both cache reads and
+writes. Tool/function requests, streaming requests, and requests asking for
+multiple completions also bypass caching. `Cache-Control: no-cache` skips
+reading but still permits refreshing the cache with the new response;
+`Cache-Control: no-store` skips both reading and writing.
+
+Semantic lookup is limited to a plain-text last user message between 8 and
+1000 characters. Short messages are too ambiguous, and embedding models can
+truncate long text so prompts that differ only near the end may appear
+identical. Semantic matches are additionally scoped by team, requested model,
+generation parameters, prior conversation context, and the ordered numeric
+signature so different numbers cannot silently share an answer. Requests that
+are ineligible for semantic lookup can still use the exact cache.
+
+Semantic vectors are stored in a Qdrant collection derived from the embedding
+model name, and startup checks the collection's vector dimension. Payload
+indexes support the team, model, context, parameter, and numeric-scope filters.
+Qdrant does not expire individual points, so lookups filter out entries older
+than the configured TTL and periodic cleanup purges those expired points.
+Semantic Qdrant operations use the async client; embedding runs off the event
+loop with at most two concurrent FastEmbed calls.
+The model is initialized once during gateway startup. If Qdrant is unavailable,
+startup logs the failure and continues with exact caching only; a restart is
+needed to re-enable semantic caching. The cleanup task and Qdrant client are
+stopped during shutdown.
+
+Cache reads and writes are best effort: Redis, embedding, or Qdrant errors are
+logged and treated as cache misses rather than request failures. Only complete
+text answers with `finish_reason == "stop"` and no tool calls are cached, and
+the serialized entry is size-capped. A hit is materialized with a fresh
+completion ID and timestamp while retaining the original response usage data.
+The entry also preserves the provider cost and model metadata for cache-hit
+accounting.
+
+Rate limiting and the monthly budget check still run before cache lookup. A hit
+returns `X-Cache: HIT`, costs `$0`, and reports the original cost in
+`X-Saved-Cost`; misses and bypasses report `X-Cache: MISS` or `BYPASS`.
+Successful provider responses are stored after sending the response. Admins can
+invalidate exact and semantic entries with `DELETE /admin/cache?team_id=<id>`,
+or clear all entries with `DELETE /admin/cache?everything=true`.
+
+### Cache layers and scope
+
+Lookup checks the Redis exact cache first. An exact hit avoids embedding and
+Qdrant; after an exact miss, eligible requests embed the last user message and
+query Qdrant for a sufficiently similar response. The vector produced during
+lookup is reused if the provider response is stored.
+
+| Field | Layer | Purpose |
+| --- | --- | --- |
+| `team_id` | Both | Prevents one tenant from reading another tenant's response. |
+| `model_requested` | Both | Keeps responses isolated by the model alias requested by the client. |
+| `context_hash` | Semantic | Hashes system and earlier-turn context, so a matching last question under different instructions does not collide. |
+| `params_hash` | Both | Separates generation settings such as temperature and token limits that can change the answer. |
+| `num_sig` | Semantic | Preserves the ordered numeric literals as a guard against matching different values. It cannot catch every direction/unit swap. |
+| `text_hash` | Semantic point ID | Makes an identical scoped prompt upsert the same Qdrant point instead of duplicating it. |
+
+The exact Redis key also hashes the full normalized message list, requested
+model, team, and generation parameters. Semantic lookups use the last user
+message for similarity, but require every semantic scope field above to match.
+
+| Condition | Cache behavior |
+| --- | --- |
+| Cache disabled, streaming, tools/functions, `n > 1`, temperature over the configured maximum, PII, or injection flag | Bypass reads and writes. |
+| `Cache-Control: no-cache` | Skip reads, call the provider, then refresh the cache. |
+| `Cache-Control: no-store` | Skip reads and writes. |
+| Temperature omitted | Remains eligible; the gateway does not assume the provider's default is a particular value. |
+
+### Cache tests
+
+The unit tests in `tests/test_cache.py` need no external services. The tests in
+`tests/test_cache_integration.py` use Redis and Qdrant from the configured
+service URLs; start the Docker services with `docker compose up -d redis qdrant`
+before running `python -m pytest tests/test_cache_integration.py`. These tests
+create unique Qdrant collections and remove them during teardown. The API test
+also initializes the real FastEmbed model on first use.
+
+A local `BAAI/bge-small-en-v1.5` run produced 384-dimensional vectors and these
+cosine similarities:
+
+| Pair | Similarity |
+| --- | ---: |
+| “What is the capital of France?” / “Which city is the capital of France?” | 0.9593 |
+| “What is the capital of France?” / “What is the capital of Germany?” | 0.7949 |
+| “What is the capital of France?” / “How do I bake bread?” | 0.3442 |
+
+The changed-country question is much closer to the paraphrase than the
+unrelated question, illustrating why a semantic threshold needs evaluation on
+the curated positive and negative pairs rather than selection from a single
+example.
+
+### Semantic threshold calibration
+
+The hand-built [cache-pair dataset](./tests/data/cache_pairs.jsonl) contains 40
+same-intent pairs, 44 different-intent pairs, 34 hard negatives, and 10
+unrelated negatives. `tests/tune_threshold.py` uses a seeded development split
+and reserves every unit-direction and time-word negative for a held-out
+challenge set. The dev split had zero false hits at `0.94`; adding a `0.01`
+margin selected `SEMANTIC_THRESHOLD=0.95`.
+
+At `0.95`, the 46-pair held-out test had a 0.273 hit rate, 0.292 false-hit
+rate, and 0.462 precision. The France paraphrase (similarity `0.9593`) hits
+and the Germany hard negative (`0.7949`) misses, but the held-out challenge
+exposed false hits for unit-direction conversions and some time-word changes.
+The ordered number guard does not distinguish unit direction when both
+requests contain the same numbers. This small, curated evaluation does not
+certify general-purpose semantic caching as safe: use it only for FAQ-style
+traffic, choose a stricter threshold if false hits matter more than recall, or
+add a verifier step before returning semantic hits.
+
+The sweep shows the recall trade-off as the threshold rises; the complete
+0.70–1.00 sweep is in [`docs/threshold_sweep.csv`](./docs/threshold_sweep.csv).
+Selected points (hit rate / false-hit rate) are:
+
+| Threshold | Dev split | Held-out test |
+| ---: | ---: | ---: |
+| 0.90 | 0.722 / 0.050 | 0.545 / 0.417 |
+| 0.94 | 0.500 / 0.000 | 0.364 / 0.333 |
+| 0.95 (chosen) | 0.500 / 0.000 | 0.273 / 0.292 |
+| 0.97 | 0.333 / 0.000 | 0.227 / 0.167 |
+| 1.00 | 0.167 / 0.000 | 0.045 / 0.000 |
+
+### Cache latency benchmark
+
+One warmed local run used `mock-fast`, Redis and Qdrant on localhost, and
+`BAAI/bge-small-en-v1.5`. The HTTP phases were 30 sequential requests each;
+the exact pass repeated the cold questions, and the semantic pass used 30
+manually written paraphrases that all exceeded the configured threshold (minimum
+cosine `0.9687`). A 500 ms pause after the cold pass allowed background stores
+to finish. Component timings are medians and p95s over 100 calls.
+
+| Path | Samples | Median | p95 |
+| --- | ---: | ---: | ---: |
+| Unique misses, cache enabled | 30 | 296.48 ms | 382.94 ms |
+| Unique misses, `CACHE_ENABLED=false` | 30 | 251.46 ms | 302.82 ms |
+| Estimated miss overhead (difference between run summaries) | 30 | +45.02 ms | +80.12 ms |
+| Exact hits | 30 | 39.81 ms | 63.10 ms |
+| Semantic paraphrase hits | 30 | 80.99 ms | 97.34 ms |
+| `embed_sync` (warmed) | 100 | 18.17 ms | 22.77 ms |
+| Filtered Qdrant query | 100 | 15.36 ms | 21.04 ms |
+
+All 30 exact and semantic requests hit. The Qdrant component measures a
+filtered lookup with no matching result and excludes embedding time; it is not
+an end-to-end semantic-hit measurement. Miss overhead is an estimate from
+subtracting the separately measured medians and p95s, not paired per-request
+differences. The first request after startup can be slower; the benchmark
+excludes its unmeasured warm-up request.
+
+### Cache limitations and deployment
+
+Redis gives exact entries a hard TTL. Qdrant does not expire points itself:
+semantic lookups apply a soft TTL filter, and the periodic cleanup task later
+deletes expired points. There is no stampede protection, so concurrent cold
+requests for the same prompt can all call the provider; a Redis `SET NX`
+single-flight lock is a possible follow-up.
+
+The cache currently shares Redis with budgets and rate limits. Do not apply an
+`allkeys-lru` eviction policy to that shared instance, because it could evict
+gateway state unrelated to caching. Production should use a separate cache
+Redis; the planned consistent-hashing cache distribution builds on that
+separation.

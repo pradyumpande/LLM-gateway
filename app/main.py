@@ -3,20 +3,26 @@ import asyncio
 import json
 import logging
 import math
+import time
 from decimal import Decimal
 from typing import Any, AsyncGenerator
 from uuid import uuid4
 
 import httpx
-from fastapi import Depends, FastAPI, Request, Response
+from fastapi import BackgroundTasks, Depends, FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
+from qdrant_client import AsyncQdrantClient
 
 from app import db, redis_client
 from app.admin.routes import router as admin_router
 from app.audit import audit
 from app.auth import AuthContext, authenticate
 from app.budget import check_budget, current_month, record_spend
+from app.cache.embedder import FastEmbedEmbedder
+from app.cache.policy import build_cache_info
+from app.cache.semantic import SemanticCache, collection_name
+from app.cache.service import CacheService, cleanup_loop, materialise
 from app.config import Settings, UnknownModelAliasError, resolve
 from app.errors import OpenAIAPIError, openai_error
 from app.guardrails.pii import build_analyzer
@@ -45,12 +51,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     db_pool = None
     redis_connection = None
+    qdrant_client = None
+    cleanup_task = None
 
     async with httpx.AsyncClient() as client:
         app.state.http_client = client
         app.state.db = None
         app.state.redis = None
         app.state.analyzer = None
+        app.state.cache = None
         app.state.settings = settings
         try:
             db_pool = await db.create_pool(settings.database_url)
@@ -67,14 +76,67 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             app.state.db = db_pool
             app.state.redis = redis_connection
             app.state.analyzer = analyzer
+            embedder = await asyncio.to_thread(
+                FastEmbedEmbedder,
+                settings.embed_model,
+                settings.fastembed_cache_dir,
+            )
+            semantic = None
+            if settings.semantic_enabled:
+                qdrant_client = AsyncQdrantClient(
+                    url=settings.qdrant_url,
+                    api_key=settings.qdrant_api_key or None,
+                    timeout=5,
+                )
+                semantic = SemanticCache(
+                    qdrant_client,
+                    collection_name(settings.embed_model),
+                    embedder.dim,
+                    settings.semantic_threshold,
+                    settings.cache_ttl_seconds,
+                    settings.embed_model,
+                )
+                try:
+                    await semantic.ensure_collection()
+                except Exception:
+                    logger.error(
+                        "Qdrant unavailable: semantic cache disabled; exact cache only",
+                        exc_info=True,
+                    )
+                    semantic = None
+
+            app.state.cache = CacheService(
+                app.state.redis,
+                semantic,
+                embedder,
+                ttl_s=settings.cache_ttl_seconds,
+                max_bytes=settings.cache_max_bytes,
+                lookup_timeout_s=settings.cache_lookup_timeout_s,
+            )
+            if semantic is not None:
+                cleanup_task = asyncio.create_task(
+                    cleanup_loop(semantic, settings.cache_cleanup_interval_s)
+                )
             yield
         finally:
             try:
-                if redis_connection is not None:
-                    await redis_connection.aclose()
+                if cleanup_task is not None:
+                    cleanup_task.cancel()
+                    try:
+                        await cleanup_task
+                    except asyncio.CancelledError:
+                        pass
             finally:
-                if db_pool is not None:
-                    await db_pool.close()
+                try:
+                    if qdrant_client is not None:
+                        await qdrant_client.close()
+                finally:
+                    try:
+                        if redis_connection is not None:
+                            await redis_connection.aclose()
+                    finally:
+                        if db_pool is not None:
+                            await db_pool.close()
 
 
 app = FastAPI(lifespan=lifespan)
@@ -110,8 +172,11 @@ def _finish_chat_response(
     prompt_tokens: int | None = None,
     completion_tokens: int | None = None,
     cost: Decimal | None = Decimal(0),
+    cache_status: str = "not_checked",
+    saved_usd: Decimal | float = Decimal(0),
 ) -> Any:
     cost_value = "unknown" if cost is None else format(cost, "f")
+    saved_value = format(Decimal(str(saved_usd)), "f")
     print(
         json.dumps(
             {
@@ -120,6 +185,8 @@ def _finish_chat_response(
                 "prompt_tokens": prompt_tokens,
                 "completion_tokens": completion_tokens,
                 "cost_usd": cost_value,
+                "cache_status": cache_status,
+                "saved_usd": saved_value,
             },
             separators=(",", ":"),
         )
@@ -135,8 +202,10 @@ async def chat_completions(
     request: Request,
     req: ChatRequest,
     response: Response,
+    background_tasks: BackgroundTasks,
     auth: AuthContext = Depends(authenticate),
 ) -> Any:
+    t0 = time.perf_counter()
     response.headers["X-RateLimit-Limit"] = str(auth.rpm)
     try:
         allowed, retry_after_ms = await check_rate_limit(request.app.state.redis, auth)
@@ -240,6 +309,61 @@ async def chat_completions(
 
     payload = guard.payload
 
+    settings = request.app.state.settings
+    cache = request.app.state.cache
+    info = build_cache_info(
+        payload,
+        auth.team_id,
+        enabled=settings.cache_enabled,
+        max_temperature=settings.cache_max_temperature,
+        pii_found=request.state.pii_found,
+        injection_flagged=request.state.injection_flag,
+        cache_control=request.headers.get("cache-control"),
+        semantic_enabled=settings.semantic_enabled and cache.semantic is not None,
+        sem_min=settings.semantic_min_chars,
+        sem_max=settings.semantic_max_chars,
+    )
+    lookup = await cache.lookup(info)
+    if lookup.kind is not None and lookup.entry is not None:
+        body = materialise(lookup.entry)
+        saved = float(lookup.entry["cost_usd"])
+        request.state.cache_status = f"{lookup.kind}_hit"
+        request.state.saved_usd = saved
+        headers = dict(response.headers)
+        headers.update(
+            {
+                "X-Cache": "HIT",
+                "X-Cache-Type": lookup.kind,
+                "X-Cache-Age": str(lookup.age_s or 0),
+                "X-Cost": "0",
+                "X-Saved-Cost": f"{saved:.6f}",
+            }
+        )
+        if lookup.score is not None:
+            headers["X-Cache-Score"] = f"{lookup.score:.4f}"
+        print(
+            f"req={request.state.request_id} cache={lookup.kind} "
+            f"latency_ms={(time.perf_counter() - t0) * 1000:.0f}"
+        )
+        cached_usage = body.get("usage")
+        return _finish_chat_response(
+            JSONResponse(body, headers=headers),
+            response,
+            auth,
+            req.model,
+            cached_usage.get("prompt_tokens") if isinstance(cached_usage, dict) else None,
+            cached_usage.get("completion_tokens") if isinstance(cached_usage, dict) else None,
+            Decimal(0),
+            cache_status=request.state.cache_status,
+            saved_usd=saved,
+        )
+
+    request.state.cache_status = "miss"
+    request.state.saved_usd = 0.0
+    response.headers["X-Cache"] = "BYPASS" if info.bypass_reason else "MISS"
+    if info.bypass_reason:
+        response.headers["X-Cache-Bypass"] = info.bypass_reason
+
     try:
         provider_config, model_id, api_key = resolve(req.model)
     except UnknownModelAliasError as exc:
@@ -322,6 +446,15 @@ async def chat_completions(
         cost,
     )
 
+    background_tasks.add_task(
+        cache.store,
+        info,
+        lookup.vector,
+        result,
+        float(cost),
+        req.model,
+        provider_config.base_url,
+    )
     return _finish_chat_response(
         result,
         response,
@@ -330,6 +463,8 @@ async def chat_completions(
         prompt_tokens,
         completion_tokens,
         cost,
+        cache_status=request.state.cache_status,
+        saved_usd=request.state.saved_usd,
     )
 
 

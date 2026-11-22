@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 import app.main as main
 from app.auth import AuthContext, authenticate
 from app.config import ProviderConfig, UnknownModelAliasError
+from app.cache.service import LookupResult
 
 
 @pytest.fixture(autouse=True)
@@ -25,10 +26,24 @@ def mock_external_services(monkeypatch):
         lambda: SimpleNamespace(
             database_url="postgresql://test",
             redis_url="redis://test",
+            qdrant_url="http://qdrant.test",
+            qdrant_api_key=None,
             pii_score_threshold=0.5,
             max_input_chars=200_000,
             injection_flag_threshold=0.4,
             injection_block_threshold=0.8,
+            cache_enabled=True,
+            cache_ttl_seconds=3600,
+            cache_max_temperature=0.7,
+            cache_max_bytes=102_400,
+            cache_lookup_timeout_s=1.5,
+            cache_cleanup_interval_s=600,
+            semantic_enabled=False,
+            semantic_threshold=0.92,
+            semantic_min_chars=8,
+            semantic_max_chars=1000,
+            embed_model="BAAI/bge-small-en-v1.5",
+            fastembed_cache_dir=".cache/fastembed",
             pii_entities=[
                 "EMAIL_ADDRESS",
                 "IN_PHONE",
@@ -42,6 +57,11 @@ def mock_external_services(monkeypatch):
         main,
         "build_analyzer",
         Mock(return_value=SimpleNamespace(analyze=Mock(return_value=[]))),
+    )
+    monkeypatch.setattr(
+        main,
+        "FastEmbedEmbedder",
+        Mock(return_value=SimpleNamespace(dim=384, name="test-model")),
     )
     monkeypatch.setattr(
         main.db,
@@ -125,25 +145,12 @@ def test_lifespan_creates_and_closes_shared_http_client():
 
 
 def test_lifespan_builds_stores_and_warms_analyzer(monkeypatch):
-    settings = SimpleNamespace(
-        database_url="postgresql://test",
-        redis_url="redis://test",
-        pii_score_threshold=0.5,
-        max_input_chars=200_000,
-        injection_flag_threshold=0.4,
-        injection_block_threshold=0.8,
-        pii_entities=[
-            "EMAIL_ADDRESS",
-            "IN_PHONE",
-            "AADHAAR",
-            "IN_PAN",
-            "CREDIT_CARD",
-        ],
-    )
+    settings = main.Settings()
     analyzer = SimpleNamespace(analyze=Mock(return_value=[]))
 
     settings_thread_ids = []
     analyzer_thread_ids = []
+    embedder_thread_ids = []
 
     def load_settings():
         settings_thread_ids.append(threading.get_ident())
@@ -153,18 +160,33 @@ def test_lifespan_builds_stores_and_warms_analyzer(monkeypatch):
         analyzer_thread_ids.append(threading.get_ident())
         return analyzer
 
+    def build_embedder(model_name, cache_dir):
+        embedder_thread_ids.append(threading.get_ident())
+        assert model_name == settings.embed_model
+        assert cache_dir == settings.fastembed_cache_dir
+        return SimpleNamespace(dim=384, name=model_name)
+
     build = Mock(side_effect=build_analyzer)
     monkeypatch.setattr(main, "Settings", load_settings)
     monkeypatch.setattr(main, "build_analyzer", build)
+    embedder_factory = Mock(side_effect=build_embedder)
+    monkeypatch.setattr(main, "FastEmbedEmbedder", embedder_factory)
 
     with TestClient(main.app):
         assert main.app.state.analyzer is analyzer
         assert main.app.state.settings is settings
+        assert main.app.state.cache is not None
 
     build.assert_called_once_with()
+    embedder_factory.assert_called_once_with(
+        settings.embed_model,
+        settings.fastembed_cache_dir,
+    )
     assert settings_thread_ids
     assert analyzer_thread_ids
+    assert embedder_thread_ids
     assert analyzer_thread_ids[0] != settings_thread_ids[0]
+    assert embedder_thread_ids[0] != settings_thread_ids[0]
     analyzer.analyze.assert_called_once_with(
         text="warm up 98765 43210",
         language="en",
@@ -173,21 +195,7 @@ def test_lifespan_builds_stores_and_warms_analyzer(monkeypatch):
 
 
 def test_lifespan_connects_and_closes_database_and_redis(monkeypatch):
-    settings = SimpleNamespace(
-        database_url="postgresql://test",
-        redis_url="redis://test",
-        pii_score_threshold=0.5,
-        max_input_chars=200_000,
-        injection_flag_threshold=0.4,
-        injection_block_threshold=0.8,
-        pii_entities=[
-            "EMAIL_ADDRESS",
-            "IN_PHONE",
-            "AADHAAR",
-            "IN_PAN",
-            "CREDIT_CARD",
-        ],
-    )
+    settings = main.Settings()
     monkeypatch.setattr(main, "Settings", lambda: settings)
 
     db_pool = SimpleNamespace(close=AsyncMock())
@@ -208,9 +216,85 @@ def test_lifespan_connects_and_closes_database_and_redis(monkeypatch):
         redis_client.ping.assert_awaited_once()
         assert main.app.state.db is db_pool
         assert main.app.state.redis is redis_client
+        assert main.app.state.cache is not None
 
     redis_client.aclose.assert_awaited_once()
     db_pool.close.assert_awaited_once()
+
+
+def test_lifespan_initializes_and_closes_semantic_cache(monkeypatch):
+    settings = main.Settings()
+    settings.semantic_enabled = True
+    settings.qdrant_api_key = "test-qdrant-key"
+    monkeypatch.setattr(main, "Settings", lambda: settings)
+
+    qdrant = SimpleNamespace(close=AsyncMock())
+    qdrant_factory = Mock(return_value=qdrant)
+    monkeypatch.setattr(main, "AsyncQdrantClient", qdrant_factory)
+    semantic = SimpleNamespace(ensure_collection=AsyncMock())
+    semantic_factory = Mock(return_value=semantic)
+    monkeypatch.setattr(main, "SemanticCache", semantic_factory)
+    collection_name = Mock(return_value="semantic_cache_test")
+    monkeypatch.setattr(main, "collection_name", collection_name)
+    cleanup = AsyncMock()
+    monkeypatch.setattr(main, "cleanup_loop", cleanup)
+
+    with TestClient(main.app):
+        assert main.app.state.cache.semantic is semantic
+
+    qdrant_factory.assert_called_once_with(
+        url=settings.qdrant_url,
+        api_key="test-qdrant-key",
+        timeout=5,
+    )
+    collection_name.assert_called_once_with(settings.embed_model)
+    semantic_factory.assert_called_once_with(
+        qdrant,
+        "semantic_cache_test",
+        384,
+        settings.semantic_threshold,
+        settings.cache_ttl_seconds,
+        settings.embed_model,
+    )
+    semantic.ensure_collection.assert_awaited_once()
+    cleanup.assert_called_once_with(semantic, settings.cache_cleanup_interval_s)
+    qdrant.close.assert_awaited_once()
+
+
+def test_lifespan_disables_semantic_cache_if_qdrant_startup_fails(monkeypatch):
+    settings = main.Settings()
+    settings.semantic_enabled = True
+    monkeypatch.setattr(main, "Settings", lambda: settings)
+
+    qdrant = SimpleNamespace(close=AsyncMock())
+    monkeypatch.setattr(main, "AsyncQdrantClient", Mock(return_value=qdrant))
+    semantic = SimpleNamespace(
+        ensure_collection=AsyncMock(side_effect=RuntimeError("Qdrant is offline"))
+    )
+    monkeypatch.setattr(main, "SemanticCache", Mock(return_value=semantic))
+    cleanup = AsyncMock()
+    monkeypatch.setattr(main, "cleanup_loop", cleanup)
+
+    with TestClient(main.app):
+        assert main.app.state.cache.semantic is None
+
+    cleanup.assert_not_called()
+    qdrant.close.assert_awaited_once()
+
+
+def test_cleanup_loop_repeats_and_cancels_cleanly():
+    semantic = SimpleNamespace(purge_expired=AsyncMock())
+
+    async def run():
+        task = asyncio.create_task(main.cleanup_loop(semantic, 0.001))
+        await asyncio.sleep(0.01)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(run())
+
+    assert semantic.purge_expired.await_count >= 1
 
 
 @pytest.mark.parametrize(
@@ -298,6 +382,8 @@ def test_chat_passes_through_extra_fields_and_translates_model(monkeypatch, caps
     assert response.headers["x-ratelimit-limit"] == "60"
     assert response.headers["x-team"] == "test-team"
     assert response.headers["x-cost"] == "0.006"
+    assert response.headers["x-cache"] == "BYPASS"
+    assert response.headers["x-cache-bypass"] == "tools"
     log_entry = json.loads(capsys.readouterr().out)
     assert log_entry == {
         "team": "test-team",
@@ -305,6 +391,8 @@ def test_chat_passes_through_extra_fields_and_translates_model(monkeypatch, caps
         "prompt_tokens": 4,
         "completion_tokens": 2,
         "cost_usd": "0.006",
+        "cache_status": "miss",
+        "saved_usd": "0.0",
     }
     main.record_spend.assert_awaited_once_with(
         main.app.state.redis,
@@ -321,6 +409,157 @@ def test_chat_passes_through_extra_fields_and_translates_model(monkeypatch, caps
         "2026-11",
         Decimal("0.006"),
     )
+
+
+def test_cache_hit_skips_provider_and_spend(monkeypatch, capsys):
+    entry = {
+        "response": {
+            "id": "chatcmpl-original",
+            "created": 1,
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {"role": "assistant", "content": "cached answer"},
+                }
+            ],
+            "usage": {"prompt_tokens": 4, "completion_tokens": 2},
+        },
+        "cost_usd": 0.0125,
+        "model_alias": "alias",
+        "provider": "https://provider.test/v1",
+        "created_at": 1,
+    }
+    cache = SimpleNamespace(
+        semantic=None,
+        lookup=AsyncMock(
+            return_value=LookupResult(
+                kind="exact",
+                entry=entry,
+                age_s=5,
+            )
+        ),
+        store=AsyncMock(),
+    )
+    monkeypatch.setattr(
+        main,
+        "resolve",
+        Mock(side_effect=AssertionError("Cache hit must not resolve a model")),
+    )
+    monkeypatch.setattr(
+        main,
+        "record_spend",
+        AsyncMock(side_effect=AssertionError("Cache hit must not record spend")),
+    )
+
+    def configure_app(app):
+        app.state.cache = cache
+
+    response = run_request(
+        "POST",
+        "/v1/chat/completions",
+        json={
+            "model": "alias",
+            "messages": [{"role": "user", "content": "What is cached?"}],
+        },
+        configure_app=configure_app,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["id"].startswith("chatcmpl-cache-")
+    assert response.json()["choices"][0]["message"]["content"] == "cached answer"
+    assert response.json()["usage"] == {"prompt_tokens": 4, "completion_tokens": 2}
+    assert response.headers["x-cache"] == "HIT"
+    assert response.headers["x-cache-type"] == "exact"
+    assert response.headers["x-cache-age"] == "5"
+    assert response.headers["x-cost"] == "0"
+    assert response.headers["x-saved-cost"] == "0.012500"
+    assert response.headers["x-team"] == "test-team"
+    assert response.headers["x-ratelimit-limit"] == "60"
+    info = cache.lookup.await_args.args[0]
+    assert info.read and info.write
+    main.resolve.assert_not_called()
+    main.record_spend.assert_not_awaited()
+    cache.store.assert_not_awaited()
+    log_entry = json.loads(capsys.readouterr().out.splitlines()[-1])
+    assert log_entry["cache_status"] == "exact_hit"
+    assert log_entry["saved_usd"] == "0.0125"
+
+
+def test_cache_miss_stores_in_background_and_preserves_success_headers(monkeypatch, capsys):
+    events = []
+    cache = SimpleNamespace(
+        semantic=None,
+        lookup=AsyncMock(return_value=LookupResult(vector=[0.1, 0.2])),
+        store=AsyncMock(
+            side_effect=lambda *args: events.append("store"),
+        ),
+    )
+    monkeypatch.setattr(
+        main,
+        "resolve",
+        lambda alias: (
+            ProviderConfig(
+                base_url="https://provider.test/v1",
+                api_key_env="TEST_API_KEY",
+            ),
+            "real-model-id",
+            "test-key",
+        ),
+    )
+
+    async def record_spend(*args):
+        events.append("spend")
+
+    monkeypatch.setattr(main, "record_spend", record_spend)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        events.append("provider")
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-provider",
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {"role": "assistant", "content": "fresh answer"},
+                    }
+                ],
+                "usage": {"prompt_tokens": 4, "completion_tokens": 2},
+            },
+        )
+
+    def configure_app(app):
+        app.state.cache = cache
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        app.state.http_client = client
+        return client
+
+    response = run_request(
+        "POST",
+        "/v1/chat/completions",
+        json={
+            "model": "alias",
+            "messages": [{"role": "user", "content": "Ask a fresh question"}],
+        },
+        configure_app=configure_app,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["id"] == "chatcmpl-provider"
+    assert response.headers["x-cache"] == "MISS"
+    assert response.headers["x-cost"] == "0.006"
+    assert response.headers["x-team"] == "test-team"
+    assert response.headers["x-ratelimit-limit"] == "60"
+    assert events == ["provider", "spend", "store"]
+    cache.store.assert_awaited_once()
+    info, vector, stored_response, cost, alias, provider = cache.store.await_args.args
+    assert info.write
+    assert vector == [0.1, 0.2]
+    assert stored_response == response.json()
+    assert cost == 0.006
+    assert alias == "alias"
+    assert provider == "https://provider.test/v1"
+    assert json.loads(capsys.readouterr().out.splitlines()[-1])["cache_status"] == "miss"
 
 
 def test_chat_masks_pii_before_calling_provider(monkeypatch):
@@ -490,15 +729,9 @@ def test_blocked_prompt_injection_logs_rule_names_not_message_text(
 
 
 def test_oversized_chat_is_audited_and_returns_413(monkeypatch):
-    settings = SimpleNamespace(
-        database_url="postgresql://test",
-        redis_url="redis://test",
-        pii_score_threshold=0.5,
-        max_input_chars=3,
-        injection_flag_threshold=0.4,
-        injection_block_threshold=0.8,
-        pii_entities=["EMAIL_ADDRESS"],
-    )
+    settings = main.Settings()
+    settings.max_input_chars = 3
+    settings.pii_entities = ["EMAIL_ADDRESS"]
     monkeypatch.setattr(main, "Settings", lambda: settings)
     resolve = Mock(side_effect=AssertionError("Oversized input must not resolve"))
     monkeypatch.setattr(main, "resolve", resolve)

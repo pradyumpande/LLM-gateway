@@ -1,0 +1,84 @@
+{"a":"What is the capital of France?","b":"Which city is the capital of France?","same":true,"type":"paraphrase"}
+{"a":"how do i reset my password","b":"How can I reset my password?","same":true,"type":"paraphrase"}
+{"a":"Explain how Redis TTL expiration works.","b":"How does Redis expire keys after a TTL?","same":true,"type":"paraphrase"}
+{"a":"Give me three vegetarian lunch ideas.","b":"Suggest three meat-free options for lunch.","same":true,"type":"paraphrase"}
+{"a":"What is the capital of Japan?","b":"Which city is Japan's capital?","same":true,"type":"paraphrase"}
+{"a":"Explain the difference between HTTP and HTTPS.","b":"How does HTTPS differ from HTTP?","same":true,"type":"paraphrase"}
+{"a":"Write a Python function to reverse a string.","b":"Show Python code that returns a string in reverse order.","same":true,"type":"paraphrase"}
+{"a":"What causes the seasons on Earth?","b":"Why does Earth have different seasons during the year?","same":true,"type":"paraphrase"}
+{"a":"How can I reduce SQL query latency?","b":"What are practical ways to make database queries faster?","same":true,"type":"paraphrase"}
+{"a":"Define idempotency in an API.","b":"What does it mean for an API operation to be idempotent?","same":true,"type":"paraphrase"}
+{"a":"Give a short explanation of OAuth.","b":"Briefly describe how OAuth authorization works.","same":true,"type":"paraphrase"}
+{"a":"What is a semantic cache?","b":"Explain semantic caching in a language model gateway.","same":true,"type":"paraphrase"}
+{"a":"How do I make a new Git branch?","b":"What are the steps to create a branch in Git?","same":true,"type":"paraphrase"}
+{"a":"Why does water boil when heated?","b":"What makes heated water reach its boiling point?","same":true,"type":"paraphrase"}
+{"a":"What is photosynthesis?","b":"How do plants turn sunlight into chemical energy?","same":true,"type":"paraphrase"}
+{"a":"Could you explain what a REST API is?","b":"Please describe the purpose of a REST API.","same":true,"type":"politeness"}
+{"a":"Tell me how to sort a Python list.","b":"Could you show me how to put a Python list in order?","same":true,"type":"politeness"}
+{"a":"What does DNS do?","b":"Would you explain the role of DNS?","same":true,"type":"politeness"}
+{"a":"How can I stop a Docker container?","b":"Could you tell me how to stop a running Docker container?","same":true,"type":"politeness"}
+{"a":"What is encryption at rest?","b":"Would you briefly explain encryption at rest?","same":true,"type":"politeness"}
+{"a":"what is a python list","b":"WHAT IS A PYTHON LIST?","same":true,"type":"casing"}
+{"a":"Explain redis caching","b":"explain Redis caching","same":true,"type":"casing"}
+{"a":"how does dns work?","b":"HOW DOES DNS WORK?","same":true,"type":"casing"}
+{"a":"define machine learning","b":"Define Machine Learning","same":true,"type":"casing"}
+{"a":"what is an api key?","b":"What Is an API Key?","same":true,"type":"casing"}
+{"a":"What is a cache key?","b":"What is a cache key","same":true,"type":"punctuation"}
+{"a":"Explain TLS, please.","b":"Explain TLS please!","same":true,"type":"punctuation"}
+{"a":"How do I rename a file?","b":"How do I rename a file!!!","same":true,"type":"punctuation"}
+{"a":"Where is the nearest library?","b":"Where is the nearest library?!","same":true,"type":"punctuation"}
+{"a":"What does HTTP 404 mean?","b":"What does HTTP 404 mean...","same":true,"type":"punctuation"}
+{"a":"What is machien learning?","b":"What is machine learning?","same":true,"type":"typo"}
+{"a":"How do I reset my passwrod?","b":"How can I reset my password?","same":true,"type":"typo"}
+{"a":"What is sematic caching?","b":"What is semantic caching?","same":true,"type":"typo"}
+{"a":"How does Redis expiraton work?","b":"How does Redis expiration work?","same":true,"type":"typo"}
+{"a":"Where is the nearest libray?","b":"Where is the nearest library?","same":true,"type":"typo"}
+{"a":"Summarize the benefits of unit testing.","b":"What are the advantages of writing unit tests?","same":true,"type":"rewording"}
+{"a":"What is the purpose of a Python virtual environment?","b":"Why should I use a virtual environment for Python?","same":true,"type":"rewording"}
+{"a":"How can I make an email subject clearer?","b":"What are ways to improve the clarity of an email subject line?","same":true,"type":"rewording"}
+{"a":"What is a Docker image?","b":"How would you describe a Docker image?","same":true,"type":"rewording"}
+{"a":"Explain how a database index helps.","b":"How can an index make database lookups faster?","same":true,"type":"rewording"}
+{"a":"What is the capital of France?","b":"What is the capital of Germany?","same":false,"type":"entity_swap"}
+{"a":"Which city is the capital of Japan?","b":"Which city is the capital of South Korea?","same":false,"type":"entity_swap"}
+{"a":"Who wrote Pride and Prejudice?","b":"Who wrote Jane Eyre?","same":false,"type":"entity_swap"}
+{"a":"What is the largest planet in our solar system?","b":"What is the smallest planet in our solar system?","same":false,"type":"entity_swap"}
+{"a":"What is the boiling point of water?","b":"What is the freezing point of water?","same":false,"type":"entity_swap"}
+{"a":"How do I connect to PostgreSQL?","b":"How do I connect to MySQL?","same":false,"type":"entity_swap"}
+{"a":"What is the currency used in India?","b":"What is the currency used in Japan?","same":false,"type":"entity_swap"}
+{"a":"Which language is spoken in Brazil?","b":"Which language is spoken in Argentina?","same":false,"type":"entity_swap"}
+{"a":"How do I enable two-factor authentication?","b":"How do I disable two-factor authentication?","same":false,"type":"opposite"}
+{"a":"How can I increase the database timeout?","b":"How can I decrease the database timeout?","same":false,"type":"opposite"}
+{"a":"Include archived records in the report.","b":"Exclude archived records from the report.","same":false,"type":"opposite"}
+{"a":"Allow users to access the dashboard.","b":"Deny users access to the dashboard.","same":false,"type":"opposite"}
+{"a":"Open the network connection.","b":"Close the network connection.","same":false,"type":"opposite"}
+{"a":"Who won the 2018 World Cup?","b":"Who won the 2022 World Cup?","same":false,"type":"number"}
+{"a":"Show me 3 examples of sorting algorithms.","b":"Show me 5 examples of sorting algorithms.","same":false,"type":"number"}
+{"a":"What is 2+2?","b":"What is 2+3?","same":false,"type":"number"}
+{"a":"Calculate 12 percent of 80.","b":"Calculate 12 percent of 90.","same":false,"type":"number"}
+{"a":"How many days are in 1 week?","b":"How many days are in 2 weeks?","same":false,"type":"number"}
+{"a":"Show today's weather in Mumbai.","b":"Show tomorrow's weather in Mumbai.","same":false,"type":"time"}
+{"a":"Should I run the migration before deployment?","b":"Should I run the migration after deployment?","same":false,"type":"time"}
+{"a":"Summarize last week's sales.","b":"Summarize next week's sales.","same":false,"type":"time"}
+{"a":"Schedule the backup for this morning.","b":"Schedule the backup for this evening.","same":false,"type":"time"}
+{"a":"Convert 10 km to miles.","b":"Convert 10 miles to km.","same":false,"type":"swap"}
+{"a":"Convert 70 Fahrenheit to Celsius.","b":"Convert 70 Celsius to Fahrenheit.","same":false,"type":"swap"}
+{"a":"Convert 5 kilograms to pounds.","b":"Convert 5 pounds to kilograms.","same":false,"type":"swap"}
+{"a":"Convert 60 miles per hour to kilometers per hour.","b":"Convert 60 kilometers per hour to miles per hour.","same":false,"type":"swap"}
+{"a":"How do Python lists work?","b":"How do Python tuples work?","same":false,"type":"similar_topic"}
+{"a":"Explain Python dictionaries.","b":"Explain Python sets.","same":false,"type":"similar_topic"}
+{"a":"How does Redis expiration work?","b":"How does Redis persistence work?","same":false,"type":"similar_topic"}
+{"a":"What is the difference between unit and integration tests?","b":"What is the difference between integration and end-to-end tests?","same":false,"type":"similar_topic"}
+{"a":"Explain authentication in a web app.","b":"Explain authorization in a web app.","same":false,"type":"similar_topic"}
+{"a":"How does code compilation work?","b":"How does code interpretation work?","same":false,"type":"similar_topic"}
+{"a":"How does binary search work?","b":"How does bubble sort work?","same":false,"type":"similar_topic"}
+{"a":"What is an HTTP response header?","b":"What is an HTTP response status code?","same":false,"type":"similar_topic"}
+{"a":"How do I bake sourdough bread?","b":"What causes a lunar eclipse?","same":false,"type":"unrelated"}
+{"a":"How do I prune a rose bush?","b":"What is the boiling point of nitrogen?","same":false,"type":"unrelated"}
+{"a":"Suggest a beginner yoga routine.","b":"How do I configure a PostgreSQL connection pool?","same":false,"type":"unrelated"}
+{"a":"What are good watercolor techniques?","b":"How does a CPU cache work?","same":false,"type":"unrelated"}
+{"a":"Plan a weekend hike near a lake.","b":"Explain the syntax of a regular expression.","same":false,"type":"unrelated"}
+{"a":"How do I make lentil soup?","b":"What is the difference between a comet and an asteroid?","same":false,"type":"unrelated"}
+{"a":"Write a birthday message for my sister.","b":"How does TLS certificate validation work?","same":false,"type":"unrelated"}
+{"a":"What music is good for studying?","b":"How do I repair a leaking kitchen tap?","same":false,"type":"unrelated"}
+{"a":"How can I improve my sleep schedule?","b":"Describe the layers of the Earth's atmosphere.","same":false,"type":"unrelated"}
+{"a":"Recommend a mystery novel.","b":"How do I add an index to a SQL table?","same":false,"type":"unrelated"}

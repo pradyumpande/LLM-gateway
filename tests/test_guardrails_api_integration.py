@@ -1,6 +1,7 @@
 import asyncio
 from copy import deepcopy
 import json
+from types import SimpleNamespace
 from uuid import uuid4
 
 import asyncpg
@@ -21,6 +22,7 @@ def live_services():
         database_url=base_settings.database_url
         or "postgresql://gateway:gateway@localhost:5432/gateway",
         redis_url=base_settings.redis_url or "redis://localhost:6379/0",
+        semantic_enabled=False,
     )
 
     async def check_services():
@@ -56,7 +58,7 @@ def api_harness(monkeypatch, live_services, analyzer):
                     """
                     INSERT INTO teams
                         (name, monthly_budget_usd, rate_limit_rpm, burst, pii_action)
-                    VALUES ($1, 100, 600, 20, $2)
+                    VALUES ($1, 100, 600, 100, $2)
                     RETURNING id
                     """,
                     team_name,
@@ -110,6 +112,14 @@ def api_harness(monkeypatch, live_services, analyzer):
 
         monkeypatch.setattr(main, "Settings", lambda: settings or live_services)
         monkeypatch.setattr(main, "build_analyzer", lambda: analyzer)
+        monkeypatch.setattr(
+            main,
+            "FastEmbedEmbedder",
+            lambda model_name, cache_dir: SimpleNamespace(
+                dim=384,
+                name=model_name,
+            ),
+        )
         monkeypatch.setattr(
             main,
             "resolve",

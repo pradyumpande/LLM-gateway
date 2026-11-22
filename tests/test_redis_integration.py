@@ -215,10 +215,24 @@ async def test_mock_fast_budget_rejects_after_first_success(
         lambda: SimpleNamespace(
             database_url="postgresql://test",
             redis_url=redis_url,
+            qdrant_url="http://qdrant.test",
+            qdrant_api_key=None,
             pii_score_threshold=0.5,
             max_input_chars=200_000,
             injection_flag_threshold=0.4,
             injection_block_threshold=0.8,
+            cache_enabled=True,
+            cache_ttl_seconds=3600,
+            cache_max_temperature=0.7,
+            cache_max_bytes=102_400,
+            cache_lookup_timeout_s=1.5,
+            cache_cleanup_interval_s=600,
+            semantic_enabled=False,
+            semantic_threshold=0.92,
+            semantic_min_chars=8,
+            semantic_max_chars=1000,
+            embed_model="BAAI/bge-small-en-v1.5",
+            fastembed_cache_dir=".cache/fastembed",
             pii_entities=[
                 "EMAIL_ADDRESS",
                 "IN_PHONE",
@@ -227,6 +241,10 @@ async def test_mock_fast_budget_rejects_after_first_success(
                 "CREDIT_CARD",
             ],
         ),
+    )
+    monkeypatch.setattr(
+        "app.main.FastEmbedEmbedder",
+        lambda model_name, cache_dir: SimpleNamespace(dim=384, name=model_name),
     )
     monkeypatch.setattr(
         "app.main.build_analyzer",

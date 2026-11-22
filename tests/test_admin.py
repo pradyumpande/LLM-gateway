@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from decimal import Decimal
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, call
 
 import pytest
 from fastapi import HTTPException
@@ -34,10 +34,24 @@ def admin_client(monkeypatch):
         lambda: SimpleNamespace(
             database_url="postgresql://test",
             redis_url="redis://test",
+            qdrant_url="http://qdrant.test",
+            qdrant_api_key=None,
             pii_score_threshold=0.5,
             max_input_chars=200_000,
             injection_flag_threshold=0.4,
             injection_block_threshold=0.8,
+            cache_enabled=True,
+            cache_ttl_seconds=3600,
+            cache_max_temperature=0.7,
+            cache_max_bytes=102_400,
+            cache_lookup_timeout_s=1.5,
+            cache_cleanup_interval_s=600,
+            semantic_enabled=False,
+            semantic_threshold=0.92,
+            semantic_min_chars=8,
+            semantic_max_chars=1000,
+            embed_model="BAAI/bge-small-en-v1.5",
+            fastembed_cache_dir=".cache/fastembed",
             pii_entities=[
                 "EMAIL_ADDRESS",
                 "IN_PHONE",
@@ -46,6 +60,11 @@ def admin_client(monkeypatch):
                 "CREDIT_CARD",
             ],
         ),
+    )
+    monkeypatch.setattr(
+        main,
+        "FastEmbedEmbedder",
+        lambda model_name, cache_dir: SimpleNamespace(dim=384, name=model_name),
     )
     monkeypatch.setattr(
         main,
@@ -76,6 +95,7 @@ def test_admin_routes_reject_missing_and_invalid_tokens(admin_client):
         "/admin/teams",
         headers={"X-Admin-Token": "wrong-token"},
     ).status_code == 401
+    assert client.delete("/admin/cache").status_code == 401
     database.fetch.assert_not_awaited()
 
 
@@ -217,3 +237,67 @@ def test_delete_key_deactivates_and_invalidates_redis_cache(admin_client):
     assert "WHERE id = $1" in query
     assert values == [3]
     redis.delete.assert_awaited_once_with("auth:hashed-key")
+
+
+def test_purge_cache_requires_scope_and_deletes_team_entries(admin_client):
+    client, _, redis = admin_client
+    missing_scope = client.delete("/admin/cache", headers=HEADERS)
+
+    assert missing_scope.status_code == 400
+    redis.delete.assert_not_awaited()
+
+    scanned = {}
+
+    async def scan_iter(*, match, count):
+        scanned.update(match=match, count=count)
+        for key in ("cache:exact:7:first", "cache:exact:7:second"):
+            yield key
+
+    redis.scan_iter = scan_iter
+    redis.delete = AsyncMock(side_effect=[1, 1])
+    semantic = SimpleNamespace(
+        count_team=AsyncMock(return_value=3),
+        purge_team=AsyncMock(),
+        purge_all=AsyncMock(),
+    )
+    main.app.state.cache = SimpleNamespace(semantic=semantic)
+
+    response = client.delete("/admin/cache?team_id=7", headers=HEADERS)
+
+    assert response.status_code == 200
+    assert response.json() == {"exact_deleted": 2, "semantic_deleted": 3}
+    assert scanned == {"match": "cache:exact:7:*", "count": 500}
+    assert redis.delete.await_args_list == [
+        call("cache:exact:7:first"),
+        call("cache:exact:7:second"),
+    ]
+    semantic.count_team.assert_awaited_once_with(7)
+    semantic.purge_team.assert_awaited_once_with(7)
+    semantic.purge_all.assert_not_awaited()
+
+
+def test_purge_cache_everything_uses_global_redis_and_semantic_purge(admin_client):
+    client, _, redis = admin_client
+    scanned = {}
+
+    async def scan_iter(*, match, count):
+        scanned.update(match=match, count=count)
+        yield "cache:exact:7:first"
+
+    redis.scan_iter = scan_iter
+    redis.delete = AsyncMock(return_value=1)
+    semantic = SimpleNamespace(
+        count_team=AsyncMock(),
+        purge_team=AsyncMock(),
+        purge_all=AsyncMock(),
+    )
+    main.app.state.cache = SimpleNamespace(semantic=semantic)
+
+    response = client.delete("/admin/cache?everything=true", headers=HEADERS)
+
+    assert response.status_code == 200
+    assert response.json() == {"exact_deleted": 1, "semantic_deleted": "all"}
+    assert scanned == {"match": "cache:exact:*", "count": 500}
+    semantic.purge_all.assert_awaited_once()
+    semantic.count_team.assert_not_awaited()
+    semantic.purge_team.assert_not_awaited()

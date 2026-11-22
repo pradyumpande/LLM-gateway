@@ -157,3 +157,37 @@ async def deactivate_key(key_id: int, request: Request) -> dict[str, object]:
 
     await request.app.state.redis.delete(f"auth:{row['key_hash']}")
     return {"id": row["id"], "active": False}
+
+
+@router.delete("/cache")
+async def purge_cache(
+    request: Request,
+    team_id: int | None = None,
+    everything: bool = False,
+) -> dict[str, int | str]:
+    if team_id is None and not everything:
+        raise HTTPException(400, "give team_id or everything=true")
+
+    redis = request.app.state.redis
+    cache = request.app.state.cache
+    pattern = "cache:exact:*" if everything else f"cache:exact:{team_id}:*"
+    exact_deleted = 0
+    async for key in redis.scan_iter(match=pattern, count=500):
+        exact_deleted += await redis.delete(key)
+
+    semantic_deleted: int | str = 0
+    if cache.semantic is not None:
+        if everything:
+            await cache.semantic.purge_all()
+            semantic_deleted = "all"
+        else:
+            assert team_id is not None
+            semantic_deleted = await cache.semantic.count_team(team_id)
+            await cache.semantic.purge_team(team_id)
+    elif everything:
+        semantic_deleted = "all"
+
+    return {
+        "exact_deleted": exact_deleted,
+        "semantic_deleted": semantic_deleted,
+    }
