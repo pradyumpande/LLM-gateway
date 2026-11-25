@@ -4,10 +4,20 @@
 groq-8b:      {input: null, output: null}
 groq-70b:     {input: null, output: null}
 
+# Placeholder rates for the configured Gemini Flash Lite alias.
+gemini-flash-lite: {input: 0.10, output: 0.40}
+
 # Gemini 2.5 Flash Standard paid-tier pricing through November 30, 2026.
 # From December 1, 2026 it routes to Gemini 3.5 Flash-Lite at the same rates.
 # https://ai.google.dev/gemini-api/docs/pricing#gemini-2.5-flash
 gemini-flash: {input: 0.30, output: 2.50}
 
+# Notional rates for a free OpenRouter model.
+openrouter-free: {input: 0.10, output: 0.20}
+
 # Deliberately high, notional prices for local budget tests.
 mock-fast:    {input: 1000, output: 2000}
+cheap-a:      {input: 50, output: 100}
+cheap-b:      {input: 50, output: 100}
+strong-b:     {input: 500, output: 1000}
+strong-c:     {input: 500, output: 1000}

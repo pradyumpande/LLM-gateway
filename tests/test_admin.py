@@ -34,6 +34,7 @@ def admin_client(monkeypatch):
         lambda: SimpleNamespace(
             database_url="postgresql://test",
             redis_url="redis://test",
+            models_config_path="config/models.yaml",
             qdrant_url="http://qdrant.test",
             qdrant_api_key=None,
             pii_score_threshold=0.5,
@@ -61,6 +62,12 @@ def admin_client(monkeypatch):
             ],
         ),
     )
+    monkeypatch.setattr(
+        main,
+        "load_models_config",
+        lambda _path: SimpleNamespace(providers={}),
+    )
+    monkeypatch.setattr(main, "validate_config", lambda config, _env: config)
     monkeypatch.setattr(
         main,
         "FastEmbedEmbedder",

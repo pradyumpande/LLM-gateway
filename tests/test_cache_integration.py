@@ -420,6 +420,12 @@ def test_api_cache_flow_with_live_redis_and_qdrant(
             }
 
     monkeypatch.setattr(main, "Settings", lambda: settings)
+    monkeypatch.setattr(
+        main,
+        "load_models_config",
+        lambda _path: SimpleNamespace(providers={}),
+    )
+    monkeypatch.setattr(main, "validate_config", lambda config, _env: config)
     monkeypatch.setattr(admin_routes, "Settings", lambda: settings)
     monkeypatch.setattr(
         main.db,

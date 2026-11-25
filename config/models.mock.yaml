@@ -1,0 +1,17 @@
+providers:
+  mock-a: {base_url: http://localhost:9000/v1, api_key_env: MOCK_API_KEY}
+  mock-b: {base_url: http://localhost:9001/v1, api_key_env: MOCK_API_KEY}
+  mock-c: {base_url: http://localhost:9002/v1, api_key_env: MOCK_API_KEY}
+
+models:
+  cheap-a: {provider: mock-a, model_id: mock-a-small}
+  cheap-b: {provider: mock-b, model_id: mock-b-small}
+  strong-b: {provider: mock-b, model_id: mock-b-large}
+  strong-c: {provider: mock-c, model_id: mock-c-large}
+  mock-fast: {provider: mock-a, model_id: mock-1}
+
+routing:
+  strong_threshold: 3
+  tiers:
+    cheap: [cheap-a, cheap-b]
+    strong: [strong-b, strong-c]

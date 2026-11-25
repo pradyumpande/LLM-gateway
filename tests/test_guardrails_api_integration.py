@@ -111,6 +111,12 @@ def api_harness(monkeypatch, live_services, analyzer):
                 }
 
         monkeypatch.setattr(main, "Settings", lambda: settings or live_services)
+        monkeypatch.setattr(
+            main,
+            "load_models_config",
+            lambda _path: SimpleNamespace(providers={}),
+        )
+        monkeypatch.setattr(main, "validate_config", lambda config, _env: config)
         monkeypatch.setattr(main, "build_analyzer", lambda: analyzer)
         monkeypatch.setattr(
             main,

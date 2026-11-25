@@ -215,6 +215,7 @@ async def test_mock_fast_budget_rejects_after_first_success(
         lambda: SimpleNamespace(
             database_url="postgresql://test",
             redis_url=redis_url,
+            models_config_path="config/models.yaml",
             qdrant_url="http://qdrant.test",
             qdrant_api_key=None,
             pii_score_threshold=0.5,
@@ -242,6 +243,11 @@ async def test_mock_fast_budget_rejects_after_first_success(
             ],
         ),
     )
+    monkeypatch.setattr(
+        "app.main.load_models_config",
+        lambda _path: SimpleNamespace(providers={}),
+    )
+    monkeypatch.setattr("app.main.validate_config", lambda config, _env: config)
     monkeypatch.setattr(
         "app.main.FastEmbedEmbedder",
         lambda model_name, cache_dir: SimpleNamespace(dim=384, name=model_name),

@@ -41,13 +41,36 @@ signals set `X-Injection-Flag: true`.
 
 ### Guardrail pipeline order
 
-The request path is `authenticate -> rate limit -> budget -> input size ->
-injection -> PII -> resolve model -> provider`. The size check runs before
-content analysis to reject oversized input cheaply. Bounded injection rules run
-before spaCy so a blocked request avoids the more expensive PII analysis. PII
-analysis runs in a worker thread to keep synchronous NLP work off the event
-loop. Model resolution and provider work happen only after the input passes
-guardrails.
+The request path is `authenticate -> rate limit -> budget -> guardrails -> cache
+lookup -> provider -> spend -> cache store`. Input-size checks run before content
+analysis to reject oversized input cheaply. Bounded injection rules run before
+spaCy so a blocked request avoids the more expensive PII analysis. PII analysis
+runs in a worker thread to keep synchronous NLP work off the event loop. Cache
+hits return before model resolution or provider work; successful provider
+responses are stored in a background task after spend is recorded.
+
+### Provider and routing configuration
+
+`config/models.yaml` maps public model aliases to providers and groups aliases
+into routing tiers. Each provider declares the environment variable containing
+its API key; each configured alias must also have an entry in
+`config/pricing.yaml`. `MODELS_CONFIG_PATH` selects the models file and defaults
+to `config/models.yaml`. Startup rejects unknown providers or tier aliases,
+reserved/colliding tier names, missing pricing entries, and tiers left empty
+after aliases without provider keys are dropped with warnings.
+
+For local offline development, set `MODELS_CONFIG_PATH=config/models.mock.yaml`
+and provide `MOCK_API_KEY`. That config maps the cheap and strong tiers across
+three mock-provider endpoints; `cheap-b` and `strong-b` intentionally share
+mock provider B.
+
+Start the three mock servers from PowerShell with
+`.\.venv313\Scripts\python.exe scripts\run_mocks.py`. Each server exposes
+`/_control` (GET/POST), `/_stats`, and `/_reset_stats`. For example, POST
+`{"fail_rate":1.0,"fail_status":503}` to `http://localhost:9000/_control` to
+make provider A return injected 503 errors, then restore it with
+`{"fail_rate":0}`. Streaming supports `stream_options.include_usage`; set
+`stream_fail_after` through `/_control` to inject a mid-stream abort.
 
 ### Limitations
 

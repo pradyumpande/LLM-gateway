@@ -3,6 +3,7 @@ import json
 import threading
 import uuid
 from decimal import Decimal
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -20,12 +21,14 @@ from app.cache.service import LookupResult
 def mock_external_services(monkeypatch):
     db_pool = SimpleNamespace(close=AsyncMock(), execute=AsyncMock())
     redis_client = SimpleNamespace(ping=AsyncMock(), aclose=AsyncMock())
+    models_config = SimpleNamespace(providers={})
     monkeypatch.setattr(
         main,
         "Settings",
         lambda: SimpleNamespace(
             database_url="postgresql://test",
             redis_url="redis://test",
+            models_config_path=Path("config/models.yaml"),
             qdrant_url="http://qdrant.test",
             qdrant_api_key=None,
             pii_score_threshold=0.5,
@@ -53,6 +56,8 @@ def mock_external_services(monkeypatch):
             ],
         ),
     )
+    monkeypatch.setattr(main, "load_models_config", lambda _path: models_config)
+    monkeypatch.setattr(main, "validate_config", lambda config, _env: config)
     monkeypatch.setattr(
         main,
         "build_analyzer",
@@ -142,6 +147,22 @@ def test_lifespan_creates_and_closes_shared_http_client():
         assert client.is_closed
 
     asyncio.run(run())
+
+
+def test_lifespan_loads_and_validates_models_config(monkeypatch):
+    models_config = SimpleNamespace(providers={})
+    validated_config = SimpleNamespace(routing="validated")
+    load_config = Mock(return_value=models_config)
+    validate = Mock(return_value=validated_config)
+    monkeypatch.setattr(main, "load_models_config", load_config)
+    monkeypatch.setattr(main, "validate_config", validate)
+    settings = main.Settings()
+
+    with TestClient(main.app):
+        assert main.app.state.models_config is validated_config
+
+    load_config.assert_called_once_with(settings.models_config_path)
+    validate.assert_called_once()
 
 
 def test_lifespan_builds_stores_and_warms_analyzer(monkeypatch):

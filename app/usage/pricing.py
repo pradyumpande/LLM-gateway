@@ -37,6 +37,10 @@ def _load_pricing() -> dict[str, dict[str, Optional[Decimal]]]:
     return pricing
 
 
+def pricing_aliases() -> frozenset[str]:
+    return frozenset(_load_pricing())
+
+
 def cost_usd(
     alias: str,
     prompt_tokens: int,

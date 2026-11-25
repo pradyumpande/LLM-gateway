@@ -3,6 +3,7 @@ import asyncio
 import json
 import logging
 import math
+import os
 import time
 from decimal import Decimal
 from typing import Any, AsyncGenerator
@@ -23,7 +24,13 @@ from app.cache.embedder import FastEmbedEmbedder
 from app.cache.policy import build_cache_info
 from app.cache.semantic import SemanticCache, collection_name
 from app.cache.service import CacheService, cleanup_loop, materialise
-from app.config import Settings, UnknownModelAliasError, resolve
+from app.config import (
+    Settings,
+    UnknownModelAliasError,
+    load_models_config,
+    resolve,
+    validate_config,
+)
 from app.errors import OpenAIAPIError, openai_error
 from app.guardrails.pii import build_analyzer
 from app.guardrails.pipeline import run_input_guardrails
@@ -49,6 +56,19 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     if not settings.redis_url:
         raise RuntimeError("REDIS_URL must be set before the gateway can start.")
 
+    models_config = load_models_config(settings.models_config_path)
+    provider_env = dict(os.environ)
+    for provider in models_config.providers.values():
+        if provider.api_key_env not in provider_env:
+            configured_key = getattr(
+                settings,
+                provider.api_key_env.lower(),
+                None,
+            )
+            if configured_key is not None:
+                provider_env[provider.api_key_env] = configured_key
+    models_config = validate_config(models_config, provider_env)
+
     db_pool = None
     redis_connection = None
     qdrant_client = None
@@ -61,6 +81,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         app.state.analyzer = None
         app.state.cache = None
         app.state.settings = settings
+        app.state.models_config = models_config
         try:
             db_pool = await db.create_pool(settings.database_url)
             redis_connection = redis_client.create_client(settings.redis_url)
